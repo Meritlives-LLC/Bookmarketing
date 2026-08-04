@@ -1,4 +1,4 @@
-import { CreativeStatus, CreativeType } from '@prisma/client';
+import { CreativeStatus, CreativeType, Prisma } from '@prisma/client';
 import { creativeRepository } from '../repositories/creative.repository';
 import { bookRepository } from '../repositories/book.repository';
 import { AppError } from '../utils/helpers';
@@ -87,7 +87,10 @@ export const creativeService = {
         }
       }
 
-      await creativeRepository.updateStatus(creativeId, CreativeStatus.READY, { content, title });
+      await creativeRepository.updateStatus(creativeId, CreativeStatus.READY, {
+        content: content as Prisma.InputJsonValue,
+        title,
+      });
     } catch (error) {
       logger.error('Creative generation error', { creativeId, error });
       await creativeRepository.updateStatus(creativeId, CreativeStatus.FAILED);
@@ -109,7 +112,10 @@ export const creativeService = {
   async update(id: string, userId: string, data: { title?: string; content?: Record<string, unknown> }) {
     const creative = await creativeRepository.findByIdForUser(id, userId);
     if (!creative) throw AppError.notFound('Creative not found');
-    return creativeRepository.update(id, data);
+    return creativeRepository.update(id, {
+      ...data,
+      content: data.content as Prisma.InputJsonValue | undefined,
+    });
   },
 
   async remove(id: string, userId: string) {

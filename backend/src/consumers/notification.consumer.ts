@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 
@@ -14,7 +15,7 @@ export async function consumeNotificationEvent(event: NotificationEvent): Promis
       userId: event.userId,
       title: event.title,
       body: event.body,
-      metadata: event.metadata,
+      metadata: event.metadata as Prisma.InputJsonValue | undefined,
     },
   });
   logger.info('Notification created', { userId: event.userId, title: event.title });

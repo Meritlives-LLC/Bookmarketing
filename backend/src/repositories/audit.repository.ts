@@ -55,7 +55,11 @@ export const auditRepository = {
 
   addAudienceInsights(auditId: string, insights: AudienceInsightPayload[]) {
     return prisma.audienceInsight.createMany({
-      data: insights.map((i) => ({ ...i, auditId })),
+      data: insights.map((i) => ({
+        ...i,
+        auditId,
+        data: i.data as Prisma.InputJsonValue,
+      })),
     });
   },
 
@@ -67,7 +71,11 @@ export const auditRepository = {
 
   addCompetitorAnalyses(auditId: string, competitors: CompetitorAnalysisPayload[]) {
     return prisma.competitorAnalysis.createMany({
-      data: competitors.map((c) => ({ ...c, auditId })),
+      data: competitors.map((c) => ({
+        ...c,
+        auditId,
+        priceComparison: c.priceComparison as Prisma.InputJsonValue | undefined,
+      })),
     });
   },
 };
