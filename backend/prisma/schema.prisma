@@ -1,0 +1,352 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────
+
+enum UserRole {
+  AUTHOR
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum SubscriptionPlan {
+  FREE
+  STARTER
+  PRO
+  AGENCY
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIALING
+  INCOMPLETE
+}
+
+enum BookGenre {
+  ROMANCE
+  ROMANTASY
+  FANTASY
+  SCI_FI
+  THRILLER
+  MYSTERY
+  YA
+  LITERARY_FICTION
+  HISTORICAL_FICTION
+  NON_FICTION
+  MEMOIR
+  SELF_HELP
+  BUSINESS
+  HORROR
+  LITRPG
+  OTHER
+}
+
+enum AuditStatus {
+  PENDING
+  SCRAPING
+  ANALYZING
+  COMPLETED
+  FAILED
+}
+
+enum ReaderSegment {
+  BOOKTOK
+  GOODREADS_POWER_READER
+  AMAZON_SEARCH_SHOPPER
+  REDDIT_COMMUNITY
+  BOOKTUBE_VIEWER
+  NEWSLETTER_SUBSCRIBER
+  FACEBOOK_GROUP
+  PODCAST_LISTENER
+  BOOK_CLUB
+  CORPORATE_HR
+  EDUCATIONAL
+  LIBRARY
+}
+
+enum CreativeType {
+  IMAGE_AD
+  VIDEO_AD
+  TIKTOK_VIDEO
+  EMAIL_COPY
+  AMAZON_KEYWORDS
+  LANDING_PAGE
+  PODCAST_PITCH
+  DISCUSSION_GUIDE
+  REDDIT_POST
+  YOUTUBE_SCRIPT
+}
+
+enum CreativeStatus {
+  DRAFT
+  GENERATING
+  READY
+  PUBLISHED
+  ARCHIVED
+  FAILED
+}
+
+enum CalendarEventStatus {
+  SCHEDULED
+  PUBLISHED
+  FAILED
+  CANCELED
+}
+
+enum Platform {
+  FACEBOOK
+  INSTAGRAM
+  TIKTOK
+  AMAZON
+  EMAIL
+  REDDIT
+  YOUTUBE
+  GOODREADS
+  PODCAST
+}
+
+// ─────────────────────────────────────────────────────────────
+// MODELS
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  passwordHash      String
+  firstName         String
+  lastName          String
+  role              UserRole  @default(AUTHOR)
+  emailVerified     Boolean   @default(false)
+  emailVerifyToken  String?
+  resetToken        String?
+  resetTokenExpires DateTime?
+  avatarUrl         String?
+  credits           Int       @default(10)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  lastLoginAt       DateTime?
+
+  books         Book[]
+  subscription  Subscription?
+  notifications Notification[]
+  apiKeys       ApiKey[]
+  billingEvents BillingEvent[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model ApiKey {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  keyHash    String    @unique
+  keyPrefix  String
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  revokedAt  DateTime?
+
+  @@index([userId])
+  @@map("api_keys")
+}
+
+model Subscription {
+  id                   String              @id @default(uuid())
+  userId               String              @unique
+  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                 SubscriptionPlan    @default(FREE)
+  status               SubscriptionStatus  @default(ACTIVE)
+  stripeCustomerId     String?             @unique
+  stripeSubscriptionId String?             @unique
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean             @default(false)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  @@map("subscriptions")
+}
+
+model BillingEvent {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  amount    Int?
+  currency  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("billing_events")
+}
+
+model Book {
+  id            String    @id @default(uuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title         String
+  subtitle      String?
+  description   String
+  genre         BookGenre
+  coverImageUrl String?
+  amazonUrl     String?
+  goodreadsUrl  String?
+  asin          String?
+  isbn          String?
+  publishedAt   DateTime?
+  price         Decimal?  @db.Decimal(10, 2)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  audits         Audit[]
+  creatives      Creative[]
+  calendarEvents CalendarEvent[]
+
+  @@index([userId])
+  @@map("books")
+}
+
+model Audit {
+  id             String      @id @default(uuid())
+  bookId         String
+  book           Book        @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  status         AuditStatus @default(PENDING)
+  requestedAt    DateTime    @default(now())
+  completedAt    DateTime?
+  errorMessage   String?
+
+  audienceInsights   AudienceInsight[]
+  keywordSuggestions KeywordSuggestion[]
+  competitorAnalyses CompetitorAnalysis[]
+
+  @@index([bookId])
+  @@map("audits")
+}
+
+model AudienceInsight {
+  id           String        @id @default(uuid())
+  auditId      String
+  audit        Audit         @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  segment      ReaderSegment
+  platform     Platform
+  summary      String
+  data         Json
+  confidence   Float         @default(0)
+  createdAt    DateTime      @default(now())
+
+  @@index([auditId])
+  @@map("audience_insights")
+}
+
+model KeywordSuggestion {
+  id            String   @id @default(uuid())
+  auditId       String
+  audit         Audit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  keyword       String
+  searchVolume  Int?
+  suggestedBid  Decimal? @db.Decimal(10, 2)
+  competition   String?
+  platform      Platform @default(AMAZON)
+  createdAt     DateTime @default(now())
+
+  @@index([auditId])
+  @@map("keyword_suggestions")
+}
+
+model CompetitorAnalysis {
+  id             String   @id @default(uuid())
+  auditId        String
+  audit          Audit    @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  competitorName String
+  competitorAsin String?
+  strengths      String[]
+  weaknesses     String[]
+  priceComparison Json?
+  createdAt      DateTime @default(now())
+
+  @@index([auditId])
+  @@map("competitor_analyses")
+}
+
+model Creative {
+  id        String         @id @default(uuid())
+  bookId    String
+  book      Book           @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  type      CreativeType
+  segment   ReaderSegment?
+  platform  Platform?
+  status    CreativeStatus @default(DRAFT)
+  title     String?
+  content   Json
+  assetUrl  String?
+  variantOf String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  calendarEvents CalendarEvent[]
+
+  @@index([bookId])
+  @@index([bookId, type])
+  @@map("creatives")
+}
+
+model CalendarEvent {
+  id          String              @id @default(uuid())
+  bookId      String
+  book        Book                @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  creativeId  String?
+  creative    Creative?           @relation(fields: [creativeId], references: [id], onDelete: SetNull)
+  platform    Platform
+  scheduledAt DateTime
+  status      CalendarEventStatus @default(SCHEDULED)
+  completedAt DateTime?
+  notes       String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([bookId])
+  @@index([scheduledAt])
+  @@map("calendar_events")
+}
+
+model AnalyticsSnapshot {
+  id           String   @id @default(uuid())
+  bookId       String
+  platform     Platform
+  date         DateTime
+  impressions  Int      @default(0)
+  clicks       Int      @default(0)
+  conversions  Int      @default(0)
+  spend        Decimal  @default(0) @db.Decimal(10, 2)
+  revenue      Decimal  @default(0) @db.Decimal(10, 2)
+  createdAt    DateTime @default(now())
+
+  @@unique([bookId, platform, date])
+  @@index([bookId])
+  @@map("analytics_snapshots")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("notifications")
+}
