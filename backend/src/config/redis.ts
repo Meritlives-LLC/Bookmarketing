@@ -22,7 +22,16 @@ redis.on('connect', () => {
 });
 
 export async function connectRedis(): Promise<void> {
-  await redis.connect();
+  // redis.connect() will hang indefinitely if REDIS_URL is wrong, because
+  // retryStrategy never gives up (by design, for self-healing). That's fine
+  // for the long-lived background client, but bootstrap() must not block
+  // server startup on it — so race it against a timeout here. The retry
+  // loop keeps running in the background regardless, and 'connect' will
+  // still fire later once REDIS_URL points at a reachable instance.
+  const timeout = new Promise<void>((resolve) => {
+    setTimeout(() => resolve(), 8_000);
+  });
+  await Promise.race([redis.connect().catch(() => undefined), timeout]);
 }
 
 export async function disconnectRedis(): Promise<void> {
