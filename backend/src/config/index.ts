@@ -25,7 +25,17 @@ export const config = {
   },
 
   redis: {
-    url: process.env.REDIS_URL ?? 'redis://localhost:6379',
+    url: (() => {
+      const url = process.env.REDIS_URL;
+      if (!url && process.env.NODE_ENV === 'production') {
+        // eslint-disable-next-line no-console
+        console.warn(
+          'WARNING: REDIS_URL is not set in production — falling back to redis://localhost:6379, ' +
+            'which will not exist on most hosts. Rate limiting and job queues will fail until this is set.'
+        );
+      }
+      return url ?? 'redis://localhost:6379';
+    })(),
   },
 
   jwt: {

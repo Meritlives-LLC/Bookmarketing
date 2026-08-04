@@ -46,7 +46,15 @@ export function createApp(): Express {
 
 async function bootstrap() {
   await connectDatabase();
-  await connectRedis();
+
+  try {
+    await connectRedis();
+  } catch (error) {
+    logger.error(
+      'Redis connection failed at startup — continuing without it. Rate limiting and job queues will not work until REDIS_URL is set correctly.',
+      { error: (error as Error).message }
+    );
+  }
 
   const app = createApp();
 
