@@ -40,10 +40,12 @@ export const calendarService = {
     return events;
   },
 
-  async list(userId: string, bookId: string, from?: Date, to?: Date) {
+  async list(userId: string, bookId: string, page: number, limit: number) {
     const book = await bookRepository.findByIdForUser(bookId, userId);
     if (!book) throw AppError.notFound('Book not found');
-    return calendarRepository.findManyForBook(bookId, from, to);
+    const { skip, take } = paginate(page, limit);
+    const { creatives, total } = await creativeRepository.findManyForBook(bookId, skip, take);
+    return { creatives, meta: buildPaginationMeta(total, page ?? 1, take) };
   },
 
   async getById(id: string, userId: string) {
