@@ -1,0 +1,20 @@
+# Safety net on top of backend/.gitignore and frontend/.gitignore —
+# catches env files and build artifacts no matter where they're created.
+
+node_modules/
+dist/
+.next/
+out/
+build/
+coverage/
+
+.env
+.env.local
+.env.*.local
+.env.production
+!.env.example
+!.env.local.example
+
+*.log
+.DS_Store
+*.tsbuildinfo

@@ -8,9 +8,10 @@
     "node": ">=20.10.0"
   },
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "tsx watch src/app.ts",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/app.js",
+    "start": "prisma migrate deploy && node dist/app.js",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "jest",

@@ -2,10 +2,36 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const isProduction = process.env.NODE_ENV === 'production';
+
+/**
+ * Reads a required environment variable.
+ * `fallback` is ONLY ever used outside production (local dev / test convenience).
+ * In production, a missing value always throws — insecure defaults must never
+ * silently ship (e.g. JWT signing secrets).
+ */
 function required(name: string, fallback?: string): string {
-  const value = process.env[name] ?? fallback;
-  if (value === undefined) {
-    throw new Error(`Missing required environment variable: ${name}`);
+  const value = process.env[name];
+  if (value !== undefined && value !== '') {
+    return value;
+  }
+  if (!isProduction && fallback !== undefined) {
+    return fallback;
+  }
+  throw new Error(`Missing required environment variable: ${name}`);
+}
+
+/**
+ * Same as `required`, but additionally rejects known placeholder/example
+ * values in production so a copy-pasted .env.example can't be deployed as-is.
+ */
+function requiredSecret(name: string, insecureValues: string[], fallback?: string): string {
+  const value = required(name, fallback);
+  if (isProduction && insecureValues.includes(value)) {
+    throw new Error(
+      `Environment variable ${name} is set to a known insecure/placeholder value. ` +
+        `Generate a strong secret (e.g. \`openssl rand -base64 48\`) and set it before starting in production.`
+    );
   }
   return value;
 }
@@ -25,22 +51,23 @@ export const config = {
   },
 
   redis: {
-    url: (() => {
-      const url = process.env.REDIS_URL;
-      if (!url && process.env.NODE_ENV === 'production') {
-        // eslint-disable-next-line no-console
-        console.warn(
-          'WARNING: REDIS_URL is not set in production — falling back to redis://localhost:6379, ' +
-            'which will not exist on most hosts. Rate limiting and job queues will fail until this is set.'
-        );
-      }
-      return url ?? 'redis://localhost:6379';
-    })(),
+    // Rate limiting (including auth brute-force protection) and job queues depend on
+    // Redis, so a missing REDIS_URL is treated as a hard failure in production instead
+    // of silently falling back to an address that won't exist on the host.
+    url: required('REDIS_URL', 'redis://localhost:6379'),
   },
 
   jwt: {
-    accessSecret: required('JWT_ACCESS_SECRET', 'dev-access-secret-change-me'),
-    refreshSecret: required('JWT_REFRESH_SECRET', 'dev-refresh-secret-change-me'),
+    accessSecret: requiredSecret(
+      'JWT_ACCESS_SECRET',
+      ['dev-access-secret-change-me', 'change-me-access-secret', 'change-me', 'secret'],
+      'dev-access-secret-change-me'
+    ),
+    refreshSecret: requiredSecret(
+      'JWT_REFRESH_SECRET',
+      ['dev-refresh-secret-change-me', 'change-me-refresh-secret', 'change-me', 'secret'],
+      'dev-refresh-secret-change-me'
+    ),
     accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m',
     refreshExpiresIn: process.env.JWT_REFRESH_EXPIRES_IN ?? '7d',
   },

@@ -13,6 +13,20 @@ export const auditController = {
     }
   },
 
+  async list(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { bookId } = req.query as { bookId?: string };
+      if (!bookId) {
+        res.json({ success: true, data: [] });
+        return;
+      }
+      const audits = await auditService.listByBook(bookId, req.user!.id);
+      res.json({ success: true, data: audits });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async getById(req: Request, res: Response, next: NextFunction) {
     try {
       const audit = await auditService.getById(req.params.id, req.user!.id);

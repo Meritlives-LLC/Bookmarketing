@@ -9,6 +9,7 @@ const router = Router();
 router.use(authenticate);
 
 router.post('/', validate(createAuditSchema), auditController.create);
+router.get('/', auditController.list);
 router.get('/:id', auditController.getById);
 router.post('/:id/regenerate', auditController.regenerate);
 

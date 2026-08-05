@@ -1,0 +1,121 @@
+version: '3.9'
+
+# Production compose file. Differs from docker-compose.yml (dev) in that it:
+#  - builds/runs the `runtime` stage (compiled JS, no source bind-mounts, no `npm run dev`)
+#  - does not publish Postgres/Redis ports to the host
+#  - sets restart policies and healthchecks
+#  - runs Prisma migrations automatically via the image's entrypoint (api service only)
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+
+services:
+  postgres:
+    image: postgres:16.1-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-bookmarketingos}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-postgres}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    ports:
+      - '4000:4000'
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-audit:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/scraper.worker.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-ai:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/ai.worker.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-email:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/email.worker.js
+    env_file: .env.production
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker-analytics:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/analytics.worker.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  cron:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/cron/index.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

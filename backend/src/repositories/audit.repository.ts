@@ -35,6 +35,18 @@ export const auditRepository = {
     });
   },
 
+  findByBookIdForUser(bookId: string, userId: string) {
+    return prisma.audit.findMany({
+      where: { bookId, book: { userId } },
+      orderBy: { requestedAt: 'desc' },
+      include: {
+        audienceInsights: true,
+        keywordSuggestions: true,
+        competitorAnalyses: true,
+      },
+    });
+  },
+
   updateStatus(id: string, status: AuditStatus, extra: Prisma.AuditUpdateInput = {}): Promise<Audit> {
     return prisma.audit.update({ where: { id }, data: { status, ...extra } });
   },

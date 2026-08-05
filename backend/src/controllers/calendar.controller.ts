@@ -31,6 +31,7 @@ export const calendarController = {
     try {
       const { bookId, from, to } = req.query as { bookId: string; from?: string; to?: string };
       const events = await calendarService.list(
+        req.user!.id,
         bookId,
         from ? new Date(from) : undefined,
         to ? new Date(to) : undefined

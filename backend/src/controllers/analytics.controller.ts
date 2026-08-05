@@ -11,7 +11,7 @@ export const analyticsController = {
         from ? new Date(from) : undefined,
         to ? new Date(to) : undefined
       );
-      res.json({ success: true, data: result });
+      res.json({ success: true, data: result.snapshots, meta: { totals: result.totals } });
     } catch (error) {
       next(error);
     }

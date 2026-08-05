@@ -31,6 +31,12 @@ export const auditService = {
     return audit;
   },
 
+  async listByBook(bookId: string, userId: string) {
+    const book = await bookRepository.findByIdForUser(bookId, userId);
+    if (!book) throw AppError.notFound('Book not found');
+    return auditRepository.findByBookIdForUser(bookId, userId);
+  },
+
   async run(auditId: string): Promise<void> {
     const audit = await auditRepository.findById(auditId);
     if (!audit) {

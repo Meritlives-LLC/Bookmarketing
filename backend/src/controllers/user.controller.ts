@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/user.service';
 import { userRepository } from '../repositories/user.repository';
 import { emailService } from '../services/email.service';
-import { omit } from '../utils/helpers';
+import { omit, AppError } from '../utils/helpers';
 import { config } from '../config';
 
 const COOKIE_OPTIONS = {
@@ -25,7 +25,11 @@ export const authController = {
       setAuthCookies(res, accessToken, refreshToken);
       res.status(201).json({
         success: true,
-        data: { user: omit(user, ['passwordHash', 'resetToken', 'emailVerifyToken']), accessToken },
+        data: {
+          user: omit(user, ['passwordHash', 'resetToken', 'emailVerifyToken']),
+          accessToken,
+          refreshToken,
+        },
       });
     } catch (error) {
       next(error);
@@ -38,7 +42,11 @@ export const authController = {
       setAuthCookies(res, accessToken, refreshToken);
       res.json({
         success: true,
-        data: { user: omit(user, ['passwordHash', 'resetToken', 'emailVerifyToken']), accessToken },
+        data: {
+          user: omit(user, ['passwordHash', 'resetToken', 'emailVerifyToken']),
+          accessToken,
+          refreshToken,
+        },
       });
     } catch (error) {
       next(error);
@@ -54,9 +62,12 @@ export const authController = {
   async refresh(req: Request, res: Response, next: NextFunction) {
     try {
       const token = req.cookies?.refreshToken ?? req.body.refreshToken;
+      if (!token) {
+        throw AppError.unauthorized('Refresh token missing', 'REFRESH_INVALID');
+      }
       const { accessToken, refreshToken } = await authService.refresh(token);
       setAuthCookies(res, accessToken, refreshToken);
-      res.json({ success: true, data: { accessToken } });
+      res.json({ success: true, data: { accessToken, refreshToken } });
     } catch (error) {
       next(error);
     }

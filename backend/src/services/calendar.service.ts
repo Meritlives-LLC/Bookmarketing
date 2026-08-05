@@ -40,7 +40,9 @@ export const calendarService = {
     return events;
   },
 
-  async list(bookId: string, from?: Date, to?: Date) {
+  async list(userId: string, bookId: string, from?: Date, to?: Date) {
+    const book = await bookRepository.findByIdForUser(bookId, userId);
+    if (!book) throw AppError.notFound('Book not found');
     return calendarRepository.findManyForBook(bookId, from, to);
   },
 

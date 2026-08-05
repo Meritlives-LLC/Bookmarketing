@@ -14,7 +14,7 @@ export const creativeController = {
   async list(req: Request, res: Response, next: NextFunction) {
     try {
       const { bookId, page, limit } = req.query as { bookId: string; page?: string; limit?: string };
-      const result = await creativeService.list(bookId, Number(page) || 1, Number(limit) || 20);
+      const result = await creativeService.list(req.user!.id, bookId, Number(page) || 1, Number(limit) || 20);
       res.json({ success: true, data: result.creatives, meta: result.meta });
     } catch (error) {
       next(error);
