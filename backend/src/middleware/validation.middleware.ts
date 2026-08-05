@@ -1,24 +1,34 @@
-import { Request, Response, NextFunction } from 'express';
-import { AnyZodObject, ZodError } from 'zod';
-import { AppError } from '../utils/helpers';
+import rateLimit from 'express-rate-limit';
+import { config } from '../config';
+import { ResilientRateLimitStore } from '../utils/resilient-rate-limit-store';
 
-type Source = 'body' | 'query' | 'params';
-
-export function validate(schema: AnyZodObject, source: Source = 'body') {
-  return (req: Request, _res: Response, next: NextFunction): void => {
-    try {
-      const parsed = schema.parse(req[source]);
-      (req as Record<Source, unknown>)[source] = parsed;
-      next();
-    } catch (error) {
-      if (error instanceof ZodError) {
-        const details = error.errors.map((e) => ({
-          field: e.path.join('.'),
-          message: e.message,
-        }));
-        return next(AppError.badRequest('Validation failed', 'VALIDATION_ERROR').withDetails(details));
-      }
-      next(error);
-    }
-  };
+function buildStore(prefix: string) {
+  return new ResilientRateLimitStore(prefix);
 }
+
+export const generalRateLimiter = rateLimit({
+  windowMs: config.rateLimit.windowMs,
+  max: config.rateLimit.max,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: buildStore('rl:general:'),
+  message: { success: false, error: { message: 'Too many requests, please try again later.' } },
+});
+
+export const authRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: buildStore('rl:auth:'),
+  message: { success: false, error: { message: 'Too many attempts, please try again later.' } },
+});
+
+export const aiGenerationRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 50,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: buildStore('rl:ai:'),
+  message: { success: false, error: { message: 'Generation limit reached, try again later.' } },
+});
