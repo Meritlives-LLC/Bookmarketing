@@ -103,7 +103,9 @@ export const creativeService = {
     return creative;
   },
 
-  async list(bookId: string, page: number, limit: number) {
+  async list(userId: string, bookId: string, page: number, limit: number) {
+    const book = await bookRepository.findByIdForUser(bookId, userId);
+    if (!book) throw AppError.notFound('Book not found');
     const { skip, take } = paginate(page, limit);
     const { creatives, total } = await creativeRepository.findManyForBook(bookId, skip, take);
     return { creatives, meta: buildPaginationMeta(total, page ?? 1, take) };
