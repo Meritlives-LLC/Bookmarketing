@@ -20,9 +20,11 @@ const REDIS_CALL_TIMEOUT_MS = 250;
  * when RedisStore constructor ran sendCommand before connect.
  */
 export class ResilientRateLimitStore implements Store {
+  /** Required by express-rate-limit Store interface (must be public). */
+  public prefix: string;
+
   private redisStore: RedisStore | null = null;
   private memoryStore: MemoryStore;
-  private prefix: string;
   private options: Options | undefined;
   private warnedOnce = false;
 
