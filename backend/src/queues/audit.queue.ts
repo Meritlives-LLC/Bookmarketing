@@ -1,12 +1,11 @@
 import { Queue } from 'bullmq';
-import { bullConnection, isRedisConfigured } from './connection';
+import { bullConnection } from './connection';
 import { AuditJobData } from '../types/audit.types';
 import { logger } from '../utils/logger';
 
-export const auditQueue: Queue<AuditJobData> | null =
-  isRedisConfigured && bullConnection
-    ? new Queue<AuditJobData>('audit-processing', bullConnection)
-    : null;
+export const auditQueue: Queue<AuditJobData> | null = bullConnection
+  ? new Queue<AuditJobData>('audit-processing', bullConnection)
+  : null;
 
 export async function enqueueAuditJob(data: AuditJobData) {
   if (!auditQueue) {

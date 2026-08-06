@@ -1,5 +1,5 @@
 import { Queue } from 'bullmq';
-import { bullConnection, isRedisConfigured } from './connection';
+import { bullConnection } from './connection';
 import { logger } from '../utils/logger';
 
 export interface CalendarJobData {
@@ -7,10 +7,9 @@ export interface CalendarJobData {
   days: number;
 }
 
-export const calendarQueue: Queue<CalendarJobData> | null =
-  isRedisConfigured && bullConnection
-    ? new Queue<CalendarJobData>('calendar-generation', bullConnection)
-    : null;
+export const calendarQueue: Queue<CalendarJobData> | null = bullConnection
+  ? new Queue<CalendarJobData>('calendar-generation', bullConnection)
+  : null;
 
 export async function enqueueCalendarJob(data: CalendarJobData) {
   if (!calendarQueue) {

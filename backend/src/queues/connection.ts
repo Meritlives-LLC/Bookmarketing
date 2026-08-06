@@ -1,7 +1,15 @@
-import { QueueOptions } from 'bullmq';
 import { config } from '../config';
 
-function parseRedisUrl(): { host: string; port: number; password?: string } | null {
+export type BullConnection = {
+  connection: {
+    host: string;
+    port: number;
+    password?: string;
+    maxRetriesPerRequest: null;
+  };
+};
+
+function parseRedisUrl(): BullConnection['connection'] | null {
   if (!config.redis.enabled) {
     return null;
   }
@@ -13,6 +21,7 @@ function parseRedisUrl(): { host: string; port: number; password?: string } | nu
       host,
       port: Number(url.port || 6379),
       password: url.password || undefined,
+      maxRetriesPerRequest: null,
     };
   } catch {
     return null;
@@ -21,17 +30,21 @@ function parseRedisUrl(): { host: string; port: number; password?: string } | nu
 
 const parsed = parseRedisUrl();
 
-export const isRedisConfigured = Boolean(parsed);
+export const isRedisConfigured = parsed !== null;
 
 /**
- * Only defined when Redis is enabled. Callers must check isRedisConfigured
- * before creating Queue/Worker instances — never connect to 127.0.0.1 dummy.
+ * Non-null only when Redis is enabled. Prefer requireBullConnection() in workers.
  */
-export const bullConnection: Pick<QueueOptions, 'connection'> | null = parsed
-  ? {
-      connection: {
-        ...parsed,
-        maxRetriesPerRequest: null,
-      },
-    }
+export const bullConnection: BullConnection | null = parsed
+  ? { connection: parsed }
   : null;
+
+/** Throws if Redis is not configured — use in worker entrypoints. */
+export function requireBullConnection(): BullConnection {
+  if (!bullConnection) {
+    throw new Error(
+      'REDIS_URL is not configured. Set a real Redis URL (e.g. Upstash) before starting workers.'
+    );
+  }
+  return bullConnection;
+}
