@@ -51,10 +51,13 @@ export const config = {
   },
 
   redis: {
-    // Rate limiting (including auth brute-force protection) and job queues depend on
-    // Redis, so a missing REDIS_URL is treated as a hard failure in production instead
-    // of silently falling back to an address that won't exist on the host.
-    url: required('REDIS_URL', 'redis://localhost:6379'),
+    // Optional in all environments (including production / Render).
+    // When missing or unreachable: rate limiting falls back to in-memory,
+    // and job queues will not process until Redis is available.
+    // Prefer setting REDIS_URL (e.g. Upstash or Render Redis) for multi-instance
+    // rate limits and background workers.
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    enabled: Boolean(process.env.REDIS_URL && process.env.REDIS_URL.trim() !== ''),
   },
 
   jwt: {

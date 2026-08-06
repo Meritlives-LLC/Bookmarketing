@@ -1,14 +1,13 @@
 import rateLimit from 'express-rate-limit';
-import { RedisStore } from 'rate-limit-redis';
-import { redis } from '../config/redis';
 import { config } from '../config';
+import { ResilientRateLimitStore } from '../utils/resilient-rate-limit-store';
 
+/**
+ * Uses ResilientRateLimitStore so a missing/down Redis never hangs the API.
+ * Falls back to per-process in-memory counters when Redis is unavailable.
+ */
 function buildStore(prefix: string) {
-  return new RedisStore({
-    // @ts-expect-error - ioredis command signature is compatible at runtime
-    sendCommand: (...args: string[]) => redis.call(...args),
-    prefix,
-  });
+  return new ResilientRateLimitStore(prefix);
 }
 
 export const generalRateLimiter = rateLimit({

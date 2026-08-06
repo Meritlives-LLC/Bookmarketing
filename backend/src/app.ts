@@ -50,23 +50,14 @@ async function bootstrap() {
   try {
     await connectRedis();
   } catch (error) {
-    // Rate limiting (including auth brute-force protection) and job queues depend on
-    // Redis. In production we fail fast rather than silently run without these
-    // security/reliability controls; in development we continue so the app is usable
-    // without a local Redis instance.
-    if (config.isProduction) {
-      logger.error('Redis connection failed at startup — refusing to start in production', {
-        error: (error as Error).message,
-      });
-      throw error;
-    }
-    logger.error(
-      'Redis connection failed at startup — continuing without it (development only). ' +
-        'Rate limiting and job queues will not work until Redis is reachable.',
+    // Redis is optional in all environments (including production on Render).
+    // Rate limiting falls back to in-memory; job queues stay idle until Redis is up.
+    logger.warn(
+      'Redis connection failed at startup — continuing without it. ' +
+        'Rate limiting will use in-memory fallback; job queues will not process until Redis is reachable.',
       { error: (error as Error).message }
     );
   }
-
   const app = createApp();
 
   const server = app.listen(config.port, () => {
