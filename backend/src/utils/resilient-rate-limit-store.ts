@@ -2,64 +2,93 @@ import { MemoryStore } from 'express-rate-limit';
 import type { Store, IncrementResponse, Options } from 'express-rate-limit';
 import { RedisStore } from 'rate-limit-redis';
 import { redis } from '../config/redis';
+import { config } from '../config';
 import { logger } from './logger';
 
 const REDIS_CALL_TIMEOUT_MS = 250;
 
 /**
- * Wraps RedisStore with a fast-failing MemoryStore fallback.
+ * Rate-limit store that never touches Redis at module load time.
  *
- * Without this, every request goes through the rate limiter's Redis call
- * (see rate-limit.middleware.ts), and ioredis queues commands indefinitely
- * while disconnected/reconnecting (enableOfflineQueue defaults to true, and
- * config/redis.ts's retryStrategy never gives up). That means a broken
- * REDIS_URL doesn't just disable rate limiting — it hangs EVERY request to
- * the API, including /api/health, since the rate limiter middleware runs
- * before all routes and never calls next().
+ * - REDIS_URL unset / invalid → pure in-memory (no Redis client calls)
+ * - Redis not ready yet → memory
+ * - Redis ready → RedisStore (created lazily on first use)
+ * - Redis slow/error → fall back to memory for that request
  *
- * This store races each Redis call against a short timeout and falls back
- * to an in-memory counter for that request when Redis isn't ready or is too
- * slow. Rate limiting becomes best-effort (per-instance, not shared across
- * replicas) while Redis is down, instead of the whole API becoming
- * unreachable.
+ * Avoids crash:
+ *   "Stream isn't writeable and enableOfflineQueue options is false"
+ * when RedisStore constructor ran sendCommand before connect.
  */
 export class ResilientRateLimitStore implements Store {
-  private redisStore: RedisStore;
+  private redisStore: RedisStore | null = null;
   private memoryStore: MemoryStore;
+  private prefix: string;
+  private options: Options | undefined;
   private warnedOnce = false;
 
   constructor(prefix: string) {
-    this.redisStore = new RedisStore({
-      // @ts-expect-error - ioredis command signature is compatible at runtime
-      sendCommand: (...args: string[]) => redis.call(...args),
-      prefix,
-    });
+    this.prefix = prefix;
     this.memoryStore = new MemoryStore();
   }
 
   init(options: Options): void {
-    this.redisStore.init?.(options);
+    this.options = options;
     this.memoryStore.init?.(options);
+    this.redisStore?.init?.(options);
+  }
+
+  private getRedisStore(): RedisStore | null {
+    if (!config.redis.enabled) {
+      return null;
+    }
+    if (redis.status !== 'ready') {
+      return null;
+    }
+    if (!this.redisStore) {
+      try {
+        this.redisStore = new RedisStore({
+          // @ts-expect-error - ioredis command signature is compatible at runtime
+          sendCommand: (...args: string[]) => redis.call(...args),
+          prefix: this.prefix,
+        });
+        if (this.options) {
+          this.redisStore.init?.(this.options);
+        }
+      } catch (error) {
+        if (!this.warnedOnce) {
+          this.warnedOnce = true;
+          logger.warn('Could not init Redis rate-limit store — using in-memory', {
+            error: (error as Error).message,
+          });
+        }
+        return null;
+      }
+    }
+    return this.redisStore;
   }
 
   private async withFallback<T>(
-    redisCall: () => Promise<T> | T,
+    redisCall: (store: RedisStore) => Promise<T> | T,
     memoryCall: () => Promise<T> | T
   ): Promise<T> {
-    if (redis.status !== 'ready') {
+    const store = this.getRedisStore();
+    if (!store) {
       return memoryCall();
     }
     try {
       return await Promise.race([
-        Promise.resolve(redisCall()),
+        Promise.resolve(redisCall(store)),
         new Promise<T>((_, reject) =>
-          setTimeout(() => reject(new Error('Redis rate-limit call timed out')), REDIS_CALL_TIMEOUT_MS)
+          setTimeout(
+            () => reject(new Error('Redis rate-limit call timed out')),
+            REDIS_CALL_TIMEOUT_MS
+          )
         ),
       ]);
     } catch (error) {
       if (!this.warnedOnce) {
         this.warnedOnce = true;
-        logger.error('Rate limit store falling back to in-memory (Redis unavailable/slow)', {
+        logger.warn('Rate limit falling back to in-memory (Redis unavailable/slow)', {
           error: (error as Error).message,
         });
       }
@@ -69,21 +98,21 @@ export class ResilientRateLimitStore implements Store {
 
   increment(key: string): Promise<IncrementResponse> {
     return this.withFallback(
-      () => this.redisStore.increment(key),
+      (store) => store.increment(key),
       () => this.memoryStore.increment(key)
     );
   }
 
   decrement(key: string): Promise<void> {
     return this.withFallback(
-      () => this.redisStore.decrement(key),
+      (store) => store.decrement(key),
       () => this.memoryStore.decrement(key)
     );
   }
 
   resetKey(key: string): Promise<void> {
     return this.withFallback(
-      () => this.redisStore.resetKey(key),
+      (store) => store.resetKey(key),
       () => this.memoryStore.resetKey(key)
     );
   }
