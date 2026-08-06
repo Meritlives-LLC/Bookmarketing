@@ -52,20 +52,22 @@ export const config = {
 
   redis: (() => {
     // Optional everywhere (including production / Render).
-    // Incomplete hostnames (e.g. Render id "red-xxxxx" without domain) → disabled.
-    // No DNS attempts, no ENOTFOUND spam.
+    // Disabled when: unset, invalid URL, incomplete host (red-xxxxx), or
+    // localhost/127.0.0.1 while NODE_ENV=production (Render has no local Redis).
     const raw = (process.env.REDIS_URL || '').trim();
+    const isProd = process.env.NODE_ENV === 'production';
     let enabled = false;
     let url = 'redis://127.0.0.1:6379';
     if (raw) {
       try {
         const parsed = new URL(raw);
-        const host = parsed.hostname || '';
-        const hostOk =
-          host === 'localhost' ||
-          host === '127.0.0.1' ||
-          host.includes('.');
-        if (hostOk) {
+        const host = (parsed.hostname || '').toLowerCase();
+        const isLocal = host === 'localhost' || host === '127.0.0.1';
+        const hasDomain = host.includes('.');
+        if (isLocal && !isProd) {
+          enabled = true;
+          url = raw;
+        } else if (hasDomain && !isLocal) {
           enabled = true;
           url = raw;
         }
