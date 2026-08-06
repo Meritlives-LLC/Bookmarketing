@@ -1,34 +1,37 @@
-import rateLimit from 'express-rate-limit';
-import { config } from '../config';
-import { ResilientRateLimitStore } from '../utils/resilient-rate-limit-store';
+import { Request, Response, NextFunction } from 'express';
+import { ZodSchema, ZodError } from 'zod';
+import { AppError } from '../utils/helpers';
 
-function buildStore(prefix: string) {
-  return new ResilientRateLimitStore(prefix);
+type RequestSource = 'body' | 'query' | 'params';
+
+/**
+ * Zod request validator.
+ * Usage:
+ *   validate(schema)              → validates req.body
+ *   validate(schema, 'query')     → validates req.query
+ *   validate(schema, 'params')    → validates req.params
+ *
+ * On success, replaces the source with the parsed (coerced/stripped) value.
+ */
+export function validate(schema: ZodSchema, source: RequestSource = 'body') {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    try {
+      const parsed = schema.parse(req[source]);
+      // Assign back so controllers see coerced values (e.g. page/limit as numbers)
+      (req as Request & Record<RequestSource, unknown>)[source] = parsed;
+      next();
+    } catch (error) {
+      if (error instanceof ZodError) {
+        const details = error.errors.map((e) => ({
+          path: e.path.join('.'),
+          message: e.message,
+        }));
+        next(
+          AppError.badRequest('Validation failed', 'VALIDATION_ERROR').withDetails(details)
+        );
+        return;
+      }
+      next(error);
+    }
+  };
 }
-
-export const generalRateLimiter = rateLimit({
-  windowMs: config.rateLimit.windowMs,
-  max: config.rateLimit.max,
-  standardHeaders: true,
-  legacyHeaders: false,
-  store: buildStore('rl:general:'),
-  message: { success: false, error: { message: 'Too many requests, please try again later.' } },
-});
-
-export const authRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  store: buildStore('rl:auth:'),
-  message: { success: false, error: { message: 'Too many attempts, please try again later.' } },
-});
-
-export const aiGenerationRateLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 50,
-  standardHeaders: true,
-  legacyHeaders: false,
-  store: buildStore('rl:ai:'),
-  message: { success: false, error: { message: 'Generation limit reached, try again later.' } },
-});
