@@ -50,15 +50,33 @@ export const config = {
     url: required('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/bookmarketingos'),
   },
 
-  redis: {
-    // Optional in all environments (including production / Render).
-    // When missing or unreachable: rate limiting falls back to in-memory,
-    // and job queues will not process until Redis is available.
-    // Prefer setting REDIS_URL (e.g. Upstash or Render Redis) for multi-instance
-    // rate limits and background workers.
-    url: process.env.REDIS_URL || 'redis://localhost:6379',
-    enabled: Boolean(process.env.REDIS_URL && process.env.REDIS_URL.trim() !== ''),
-  },
+  redis: (() => {
+    // Optional everywhere (including production / Render).
+    // Incomplete hostnames (e.g. Render id "red-xxxxx" without domain) → disabled.
+    // No DNS attempts, no ENOTFOUND spam.
+    const raw = (process.env.REDIS_URL || '').trim();
+    let enabled = false;
+    let url = 'redis://127.0.0.1:6379';
+    if (raw) {
+      try {
+        const parsed = new URL(raw);
+        const host = parsed.hostname || '';
+        const hostOk =
+          host === 'localhost' ||
+          host === '127.0.0.1' ||
+          host.includes('.');
+        if (hostOk) {
+          enabled = true;
+          url = raw;
+        }
+      } catch {
+        // invalid URL → disabled
+      }
+    }
+    return { url, enabled };
+  })(),
+
+
 
   jwt: {
     accessSecret: requiredSecret(

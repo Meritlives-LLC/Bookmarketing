@@ -47,7 +47,7 @@ export function createApp(): Express {
 async function bootstrap() {
   await connectDatabase();
 
-  try {
+    try {
     await connectRedis();
   } catch (error) {
     // Redis is optional in all environments (including production on Render).

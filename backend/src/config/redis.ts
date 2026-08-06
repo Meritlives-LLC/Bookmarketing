@@ -2,45 +2,89 @@ import Redis from 'ioredis';
 import { config } from './index';
 import { logger } from '../utils/logger';
 
-export const redis = new Redis(config.redis.url, {
-  maxRetriesPerRequest: null,
-  lazyConnect: true,
-  connectTimeout: 10_000,
-  retryStrategy(times) {
-    // Backs off up to 10s between attempts; keeps trying indefinitely so the
-    // service self-heals once REDIS_URL points at a reachable instance.
-    return Math.min(times * 500, 10_000);
-  },
-});
+/**
+ * When REDIS_URL is not set we never attempt a real connection.
+ * When it is set but unreachable we retry a few times then stop permanently
+ * so logs stay clean (no infinite ENOTFOUND spam on Render).
+ */
+const MAX_RETRIES = 3;
 
-redis.on('error', (error) => {
-  // Avoid log spam when Redis was never configured (e.g. Render without REDIS_URL)
-  if (config.redis.enabled) {
-    logger.error('Redis connection error', { error: error.message });
+function createRedisClient(): Redis {
+  if (!config.redis.enabled) {
+    // Inert client: never connects, never retries, never queues commands.
+    return new Redis({
+      host: '127.0.0.1',
+      port: 6379,
+      lazyConnect: true,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 0,
+      connectTimeout: 1,
+      retryStrategy: () => null, // stop immediately — no reconnects
+    });
   }
-});
 
-redis.on('connect', () => {
-  logger.info('Redis connected successfully');
-});
+  let gaveUp = false;
+
+  const client = new Redis(config.redis.url, {
+    maxRetriesPerRequest: 1,
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    connectTimeout: 5_000,
+    retryStrategy(times) {
+      if (times > MAX_RETRIES) {
+        if (!gaveUp) {
+          gaveUp = true;
+          logger.warn(
+            `Redis unreachable after ${MAX_RETRIES} attempts — giving up. ` +
+              'API continues; rate limits use in-memory; queues inactive until REDIS_URL is fixed.'
+          );
+        }
+        return null; // stop reconnecting
+      }
+      return Math.min(times * 500, 3_000);
+    },
+  });
+
+  let errorLogged = false;
+  client.on('error', (error) => {
+    // One structured log only — no stack spam
+    if (!errorLogged) {
+      errorLogged = true;
+      logger.warn('Redis connection error (will stop retrying soon)', {
+        error: error.message,
+      });
+    }
+  });
+
+  client.on('connect', () => {
+    errorLogged = false;
+    gaveUp = false;
+    logger.info('Redis connected successfully');
+  });
+
+  return client;
+}
+
+export const redis = createRedisClient();
 
 export async function connectRedis(): Promise<void> {
   if (!config.redis.enabled) {
-    logger.info(
-      'REDIS_URL not set — skipping Redis. Rate limiting uses in-memory fallback; job queues inactive.'
-    );
+    // Silent skip — no log noise when Redis was never configured
     return;
   }
 
-  // redis.connect() can retry indefinitely (retryStrategy never gives up).
-  // Race against a short timeout so bootstrap never blocks on a bad URL.
-  const timeout = new Promise<void>((resolve) => {
-    setTimeout(() => resolve(), 8_000);
-  });
-  await Promise.race([redis.connect().catch(() => undefined), timeout]);
+  try {
+    await Promise.race([
+      redis.connect().then(() => undefined).catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, 6_000)),
+    ]);
+  } catch {
+    // already handled by retryStrategy / error handler
+  }
 }
 
 export async function disconnectRedis(): Promise<void> {
+  if (!config.redis.enabled) return;
   try {
     redis.disconnect();
   } catch {
