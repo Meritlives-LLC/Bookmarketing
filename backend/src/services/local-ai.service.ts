@@ -3,13 +3,19 @@
  * network call, no per-request cost or rate limit. Replaces the previous
  * OpenAI-backed implementation entirely.
  *
- * Content is produced from genre/segment/platform template banks combined
- * with lightweight keyword extraction from the book's own title and
- * description, so output is book-specific without needing a live model.
+ * Content is produced by combining genre/segment/platform template banks
+ * with real NLP analysis of the book's own title and description (via
+ * `compromise` — a pure-JS, offline NLP library: no model download, no
+ * server, no network call). We extract actual sentences, noun phrases,
+ * adjectives, and the protagonist's name where compromise can detect one,
+ * and weave those into the output — so copy is grounded in what the book
+ * actually says, not just genre boilerplate with a word or two swapped in.
+ *
  * Every exported function mirrors the old `aiService` signatures exactly,
  * so nothing calling it needs to change.
  */
 import { Book } from '@prisma/client';
+import nlp from 'compromise';
 
 // ── deterministic "randomness" ────────────────────────────────────────────
 // Seeded by the book id (+ a salt per call site) so repeated calls for the
@@ -44,32 +50,100 @@ function pickMany<T>(arr: T[], seed: number, count: number): T[] {
   return result;
 }
 
-// ── lightweight keyword extraction from title/description ─────────────────
-const STOPWORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'of', 'to', 'in', 'on', 'for', 'with',
-  'is', 'are', 'was', 'were', 'be', 'this', 'that', 'it', 'as', 'by', 'at',
-  'from', 'her', 'his', 'their', 'she', 'he', 'they', 'has', 'have', 'had',
-  'will', 'not', 'his', 'him', 'who', 'what', 'when', 'where', 'how', 'into',
-]);
-
-function extractKeywords(book: Pick<Book, 'title' | 'description'>, count = 4): string[] {
-  const words = `${book.title} ${book.description}`
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length > 3 && !STOPWORDS.has(w));
-
-  const freq = new Map<string, number>();
-  for (const w of words) freq.set(w, (freq.get(w) ?? 0) + 1);
-
-  return [...freq.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, count)
-    .map(([w]) => w);
-}
-
 function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function genreLabel(genre: string): string {
+  return genre.toLowerCase().replace(/_/g, ' ');
+}
+
+// ── NLP-backed extraction from the book's own text ─────────────────────────
+// Everything here runs offline via `compromise` — no network, no model file.
+interface BookSignals {
+  sentences: string[]; // real sentences from the description, in order
+  hookSentence: string; // best single sentence to use as a hook/body seed
+  nounPhrases: string[]; // cleaned, deduped noun phrases (real themes/objects)
+  adjectives: string[]; // descriptive words actually used in the text
+  protagonist: string | null; // first detected person name, if any
+}
+
+const GENERIC_NOUNS = new Set([
+  'she', 'he', 'they', 'it', 'who', 'someone', 'something', 'everything',
+  'nothing', 'anyone', 'everyone', 'her', 'him', 'them', 'one',
+]);
+
+function analyzeBook(book: Pick<Book, 'title' | 'description'>): BookSignals {
+  const doc = nlp(book.description || '');
+
+  const sentences = doc
+    .sentences()
+    .out('array')
+    .map((s: string) => s.trim())
+    .filter(Boolean);
+
+  // Prefer the longest early sentence as the "hook" — short opening
+  // fragments ("Book one in a new series.") make weak hooks on their own.
+  const hookSentence =
+    sentences.slice(0, 3).sort((a: string, b: string) => b.length - a.length)[0] ?? sentences[0] ?? book.title;
+
+  const people = doc.people().out('array') as string[];
+  const protagonist = people.length > 0 ? people[0] : null;
+  const protagonistWords = protagonist
+    ? new Set(protagonist.toLowerCase().split(/\s+/))
+    : new Set<string>();
+
+  const nounPhrases = [
+    ...new Set(
+      doc
+        .nouns()
+        .out('array')
+        .map((n: string) =>
+          n
+            .toLowerCase()
+            .replace(/[.,!?]+$/, '')
+            .replace(/^(a|an|the)\s+/, '')
+            .trim()
+        )
+        .filter(
+          (n: string) =>
+            n.length > 3 &&
+            n.split(' ').length <= 3 &&
+            !GENERIC_NOUNS.has(n) &&
+            !n.split(' ').every((w) => protagonistWords.has(w))
+        )
+    ),
+  ] as string[];
+
+  const adjectives = [
+    ...new Set(
+      doc
+        .adjectives()
+        .out('array')
+        .map((a: string) => a.toLowerCase())
+        .filter((a: string) => a.length > 3)
+    ),
+  ] as string[];
+
+  return { sentences, hookSentence, nounPhrases, adjectives, protagonist };
+}
+
+// Truncates on a real sentence boundary instead of mid-word/mid-sentence.
+function excerptSentences(sentences: string[], maxChars: number): string {
+  let out = '';
+  for (const s of sentences) {
+    if ((out + ' ' + s).trim().length > maxChars && out) break;
+    out = (out ? out + ' ' : '') + s;
+    if (out.length >= maxChars) break;
+  }
+  return out || sentences[0] || '';
+}
+
+// Strips a leading subordinating conjunction ("When", "As", "After", etc.)
+// so a sentence can be safely embedded into "What happens when X...?" style
+// hooks without producing "what happens when when...".
+function stripLeadingConjunction(sentence: string): string {
+  return sentence.replace(/^(when|as|after|while|once|if)\s+/i, '');
 }
 
 // ── genre-aware content banks ───────────────────────────────────────────
@@ -124,7 +198,7 @@ const SEGMENT_TRAITS: Record<string, { loves: string[]; hates: string[]; searche
   },
   AMAZON_SEARCH_SHOPPER: {
     loves: ['clear genre + comps in the subtitle', 'strong "look inside" first pages', 'competitive Kindle Unlimited pricing'],
-    hates: ['vague product descriptions', 'covers that don\'t signal genre', 'few reviews'],
+    hates: ['vague product descriptions', "covers that don't signal genre", 'few reviews'],
     searches: ['genre + trope keyword combos', '"if you liked X" searches', 'top rated in [genre]'],
   },
   REDDIT_COMMUNITY: {
@@ -190,14 +264,16 @@ export const localAiService = {
   async generateAudienceInsight(book: Book, segment: string, platform: string) {
     const seed = seedFrom(book.id, segment, platform, 'insight');
     const traits = SEGMENT_TRAITS[segment] ?? SEGMENT_TRAITS.AMAZON_SEARCH_SHOPPER;
-    const keywords = extractKeywords(book, 3);
+    const { nounPhrases, protagonist } = analyzeBook(book);
     const tone = GENRE_TONE[book.genre] ?? GENRE_TONE.OTHER;
+    const themes = nounPhrases.slice(0, 3);
 
+    const protagonistClause = protagonist ? ` centered on ${protagonist}` : '';
     const summary =
       `Readers in the ${segment.replace(/_/g, ' ').toLowerCase()} segment on ${platform.toLowerCase()} are drawn to ${tone} ` +
-      `${book.genre.toLowerCase().replace(/_/g, ' ')} titles like "${book.title}". They respond to ` +
+      `${genreLabel(book.genre)} titles like "${book.title}"${protagonistClause}. They respond to ` +
       `${pick(traits.loves, seed)} and frequently search for ${pick(traits.searches, seed, 1)}. ` +
-      `Themes around ${keywords.join(', ') || 'the book\'s core premise'} are likely to resonate with this group.`;
+      `Themes around ${themes.join(', ') || "the book's core premise"} are likely to resonate with this group.`;
 
     return {
       summary,
@@ -205,7 +281,7 @@ export const localAiService = {
         loves: traits.loves,
         hates: traits.hates,
         searchBehavior: traits.searches,
-        resonantThemes: keywords,
+        resonantThemes: themes,
       },
       confidence: 0.5 + (seed % 30) / 100, // 0.50–0.79, deliberately conservative
     };
@@ -214,10 +290,10 @@ export const localAiService = {
   async generateKeywordSuggestions(book: Book) {
     const seed = seedFrom(book.id, 'keywords');
     const bank = GENRE_KEYWORD_BANK[book.genre] ?? GENRE_KEYWORD_BANK.OTHER;
-    const bookKeywords = extractKeywords(book, 5);
+    const { nounPhrases } = analyzeBook(book);
     const competitionLevels = ['low', 'medium', 'high'];
 
-    const combined = [...bank, ...bookKeywords.map((k) => `${k} book`)];
+    const combined = [...bank, ...nounPhrases.slice(0, 6).map((k) => `${k} book`)];
 
     const keywords = pickMany(combined, seed, 10).map((keyword, i) => ({
       keyword,
@@ -231,7 +307,7 @@ export const localAiService = {
 
   async generateCompetitorAnalysis(book: Book) {
     const seed = seedFrom(book.id, 'competitors');
-    const genreLabel = book.genre.toLowerCase().replace(/_/g, ' ');
+    const genre = genreLabel(book.genre);
     const strengthsBank = [
       'strong series momentum and reader loyalty',
       'a highly recognizable, genre-signaling cover',
@@ -246,7 +322,7 @@ export const localAiService = {
     ];
 
     const competitors = Array.from({ length: 3 }, (_, i) => ({
-      competitorName: `Comparable Title ${i + 1} in ${titleCase(genreLabel)}`,
+      competitorName: `Comparable Title ${i + 1} in ${titleCase(genre)}`,
       strengths: pickMany(strengthsBank, seed, 2 + (i % 2)),
       weaknesses: pickMany(weaknessesBank, seed + i, 2),
     }));
@@ -256,34 +332,40 @@ export const localAiService = {
 
   async generateAdCopy(book: Book, segment: string, platform: string) {
     const seed = seedFrom(book.id, segment, platform, 'adcopy');
-    const keywords = extractKeywords(book, 2);
+    const { sentences, hookSentence, protagonist } = analyzeBook(book);
     const cta = PLATFORM_CTA[platform] ?? 'Learn More';
+
     const hooks = [
-      `What if ${keywords[0] ?? 'everything'} changed in a single night?`,
+      protagonist
+        ? `Follow ${protagonist} in the ${genreLabel(book.genre)} everyone's talking about.`
+        : `What happens when ${stripLeadingConjunction(hookSentence).split(' ').slice(0, 6).join(' ').toLowerCase()}...?`,
       `Readers can't stop talking about "${book.title}."`,
-      `The ${book.genre.toLowerCase().replace(/_/g, ' ')} read everyone's recommending this month.`,
+      `The ${genreLabel(book.genre)} read everyone's recommending this month.`,
     ];
 
     return {
       headline: pick(hooks, seed),
-      body: `${book.description.slice(0, 180)}${book.description.length > 180 ? '…' : ''}`,
+      body: excerptSentences(sentences, 220) || book.description,
       callToAction: cta,
     };
   },
 
   async generateTikTokScript(book: Book) {
     const seed = seedFrom(book.id, 'tiktok');
-    const keywords = extractKeywords(book, 2);
+    const { nounPhrases, protagonist, adjectives } = analyzeBook(book);
     const hooks = [
       `POV: you just found your next obsession — "${book.title}"`,
-      `Tell me why nobody warned me about this ${book.genre.toLowerCase().replace(/_/g, ' ')} book`,
+      protagonist
+        ? `Tell me why nobody warned me about what ${protagonist} goes through in this book`
+        : `Tell me why nobody warned me about this ${genreLabel(book.genre)} book`,
       `Books that will ruin you: "${book.title}" edition`,
     ];
+    const tone = adjectives[0] ? `Keep the vibe ${adjectives[0]} throughout — that's the book's own energy.` : '';
 
     return [
       `HOOK (0-3s): ${pick(hooks, seed)}`,
       ``,
-      `BODY (4-25s): Quick, punchy summary — mention ${keywords.join(' and ') || 'the premise'} without spoilers. Hold up the book/cover on screen. Use on-screen text for the key trope callouts.`,
+      `BODY (4-25s): Quick, punchy summary — mention ${nounPhrases.slice(0, 2).join(' and ') || 'the premise'} without spoilers. Hold up the book/cover on screen. Use on-screen text for the key trope callouts. ${tone}`,
       ``,
       `CTA (26-30s): "Link in bio / comments if you want the vibes." Text overlay: "${book.title} — out now."`,
     ].join('\n');
@@ -291,8 +373,9 @@ export const localAiService = {
 
   async generateEmailCopy(book: Book) {
     const seed = seedFrom(book.id, 'email');
+    const { protagonist } = analyzeBook(book);
     const subjects = [
-      `You need to read this before everyone else does`,
+      protagonist ? `Meet ${protagonist} before everyone else does` : `You need to read this before everyone else does`,
       `"${book.title}" is finally here`,
       `The book I can't stop recommending`,
     ];
@@ -301,20 +384,22 @@ export const localAiService = {
       subject: pick(subjects, seed),
       body:
         `Hi there,\n\nI'm thrilled to share "${book.title}" with you. ${book.description}\n\n` +
-        `If you love ${(book.genre.toLowerCase().replace(/_/g, ' '))} stories, this one's for you.\n\n` +
+        `If you love ${genreLabel(book.genre)} stories, this one's for you.\n\n` +
         `Grab your copy today and let me know what you think!\n\nHappy reading,\n[Your name]`,
     };
   },
 
   async generateDiscussionGuide(book: Book) {
-    const keywords = extractKeywords(book, 3);
+    const { nounPhrases, protagonist } = analyzeBook(book);
+    const who = protagonist ?? 'the protagonist';
+
     return [
       `1. What drew you to "${book.title}" — the premise, the cover, or a recommendation?`,
-      `2. How did the theme of ${keywords[0] ?? 'the central conflict'} shape your reading experience?`,
-      `3. Which character's decisions did you agree with least, and why?`,
-      `4. Did the ${book.genre.toLowerCase().replace(/_/g, ' ')} elements meet your expectations for the genre?`,
+      `2. How did the theme of ${nounPhrases[0] ?? 'the central conflict'} shape your reading experience?`,
+      `3. Which of ${who}'s decisions did you agree with least, and why?`,
+      `4. Did the ${genreLabel(book.genre)} elements meet your expectations for the genre?`,
       `5. What would you change about the ending, if anything?`,
-      `6. How does ${keywords[1] ?? 'the setting'} function almost as its own character?`,
+      `6. How does ${nounPhrases[1] ?? 'the setting'} function almost as its own character?`,
       `7. Who would you recommend this book to, and why?`,
       `8. What's one question you'd ask the author if you could?`,
     ].join('\n');
