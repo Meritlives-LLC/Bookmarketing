@@ -121,12 +121,6 @@ export const config = {
     },
   },
 
-  ai: {
-    openaiApiKey: process.env.OPENAI_API_KEY ?? '',
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
-    defaultModel: process.env.AI_DEFAULT_MODEL ?? 'gpt-4o-mini',
-  },
-
   email: {
     host: process.env.SMTP_HOST ?? 'smtp.mailtrap.io',
     port: parseInt(process.env.SMTP_PORT ?? '2525', 10),
