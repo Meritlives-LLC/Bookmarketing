@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { api, ApiError } from "@/lib/api/client";
 import type { Audit, AudienceInsight, KeywordSuggestion, CompetitorAnalysis } from "@/types";
 import { SEGMENT_LABELS, PLATFORM_LABELS } from "@/lib/constants/platforms";
-import { formatDate } from "@/lib/utils";
+import { formatDate, exportToCsv } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
 export default function AuditDetailPage({
@@ -226,7 +226,24 @@ export default function AuditDetailPage({
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="text-base">Amazon & platform keywords</CardTitle>
-                <Button variant="outline" size="sm" className="gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  disabled={keywords.length === 0}
+                  onClick={() =>
+                    exportToCsv(
+                      `keywords-audit-${id}`,
+                      keywords.map((k) => ({
+                        keyword: k.keyword,
+                        platform: PLATFORM_LABELS[k.platform] || k.platform,
+                        searchVolume: k.searchVolume ?? "",
+                        suggestedBid: k.suggestedBid != null ? Number(k.suggestedBid).toFixed(2) : "",
+                        competition: k.competition ?? "",
+                      }))
+                    )
+                  }
+                >
                   <Download className="h-3.5 w-3.5" /> Export
                 </Button>
               </CardHeader>
