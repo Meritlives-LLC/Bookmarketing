@@ -74,6 +74,28 @@ async function refreshAccessToken(): Promise<string | null> {
   return refreshPromise;
 }
 
+// Endpoints that are themselves part of the auth flow must never trigger
+// the auto-redirect-to-login below — a 401 from a bad password on /auth/login
+// is a normal form validation result, not "your session died."
+const AUTH_FLOW_PATHS = ["/auth/login", "/auth/register", "/auth/refresh", "/auth/forgot-password", "/auth/reset-password", "/auth/logout"];
+
+function isAuthFlowPath(path: string): boolean {
+  return AUTH_FLOW_PATHS.some((p) => path.startsWith(p));
+}
+
+// A 401 that isn't recoverable via silent refresh (missing token, invalid
+// token, or refresh itself failed) means there's no valid session anymore.
+// Rather than let every page render its own raw "Authentication token
+// missing" error card, clear local state and send the person to /login —
+// same destination the middleware/AuthGuard would have sent them to had
+// they not had a session to begin with.
+function redirectToLogin() {
+  if (typeof window === "undefined") return;
+  clearTokens();
+  const redirect = `${window.location.pathname}${window.location.search}`;
+  window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`;
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -104,6 +126,9 @@ async function request<T>(
       if (newToken) {
         return request<T>(path, options, true);
       }
+    }
+    if (res.status === 401 && !isAuthFlowPath(path)) {
+      redirectToLogin();
     }
     throw new ApiError(
       json?.error?.message || json?.message || "Request failed",

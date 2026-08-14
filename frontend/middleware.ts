@@ -11,17 +11,38 @@ const protectedPrefixes = [
   "/settings",
 ];
 
+const authPrefixes = ["/login", "/register"];
+
+// The backend sets an httpOnly `refreshToken` cookie on login/register
+// (see backend/src/controllers/user.controller.ts, COOKIE_OPTIONS — 7 day
+// maxAge). Middleware runs on the server, so — unlike the JWT the client
+// keeps in localStorage for the Authorization header — this cookie IS
+// visible here via `request.cookies`. We gate on it rather than the
+// short-lived `accessToken` cookie (15 min) so a plain page reload doesn't
+// bounce someone who's still within their session; actual token validity
+// and silent refresh are handled by the API client (see lib/api/client.ts).
+function hasSession(request: NextRequest): boolean {
+  return Boolean(request.cookies.get("refreshToken")?.value);
+}
+
 export function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  const { pathname, search } = request.nextUrl;
   const isProtected = protectedPrefixes.some(
     (p) => pathname === p || pathname.startsWith(p + "/")
   );
+  const isAuthPage = authPrefixes.some(
+    (p) => pathname === p || pathname.startsWith(p + "/")
+  );
+  const authed = hasSession(request);
 
-  // Client stores JWT in localStorage; middleware cannot read it.
-  // Soft gate: allow through; pages handle redirect if unauthenticated.
-  // Optionally check cookie if you set httpOnly auth cookie later.
-  if (isProtected) {
-    return NextResponse.next();
+  if (isProtected && !authed) {
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("redirect", pathname + search);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  if (isAuthPage && authed) {
+    return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
   return NextResponse.next();
@@ -36,5 +57,7 @@ export const config = {
     "/calendar/:path*",
     "/analytics/:path*",
     "/settings/:path*",
+    "/login",
+    "/register",
   ],
 };
