@@ -13,7 +13,7 @@ export const analyticsService = {
     if (!book) throw AppError.notFound('Book not found');
 
     const snapshots = await analyticsRepository.findForBook(bookId, from, to);
-    const totals = await analyticsRepository.aggregateForBook(bookId);
+    const totals = await analyticsRepository.aggregateForBook(bookId, from, to);
 
     const spend = Number(totals.spend ?? 0);
     const revenue = Number(totals.revenue ?? 0);

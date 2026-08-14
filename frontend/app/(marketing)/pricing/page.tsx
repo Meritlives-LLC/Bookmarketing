@@ -1,9 +1,8 @@
-import Link from "next/link";
 import { Check } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PLANS } from "@/lib/constants/pricing";
 import { cn } from "@/lib/utils";
+import { PricingCta } from "./PricingCta";
 
 export const metadata = {
   title: "Pricing",
@@ -55,14 +54,7 @@ export default function PricingPage() {
                   </li>
                 ))}
               </ul>
-              <Link href="/register" className="block">
-                <Button
-                  className="w-full"
-                  variant={plan.popular ? "default" : "outline"}
-                >
-                  {plan.cta}
-                </Button>
-              </Link>
+              <PricingCta planId={plan.id} cta={plan.cta} popular={plan.popular} />
             </CardContent>
           </Card>
         ))}

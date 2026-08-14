@@ -2,11 +2,11 @@
 
 import { useEffect, useState, use } from "react";
 import Link from "next/link";
-import { ArrowLeft, Copy, Check, Trash2, Loader2 } from "lucide-react";
+import { ArrowLeft, Copy, Check, Trash2, Loader2, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { api, ApiError } from "@/lib/api/client";
+import { api, apiDownload, ApiError } from "@/lib/api/client";
 import type { Creative } from "@/types";
 import { SEGMENT_LABELS, PLATFORM_LABELS } from "@/lib/constants/platforms";
 import { formatDate } from "@/lib/utils";
@@ -20,6 +20,7 @@ export default function CreativeDetailPage({
   const [creative, setCreative] = useState<Creative | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -39,6 +40,17 @@ export default function CreativeDetailPage({
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function download() {
+    setDownloading(true);
+    try {
+      await apiDownload(`/creatives/${id}/download`, `creative-${id}.json`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Download failed");
+    } finally {
+      setDownloading(false);
+    }
   }
 
   async function remove() {
@@ -110,6 +122,10 @@ export default function CreativeDetailPage({
                   <Copy className="h-3.5 w-3.5" /> Copy
                 </>
               )}
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={download} disabled={downloading}>
+              {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+              Download
             </Button>
             <Button variant="ghost" size="icon" onClick={remove}>
               <Trash2 className="h-4 w-4 text-destructive" />

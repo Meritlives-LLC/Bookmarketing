@@ -22,5 +22,11 @@ export const updateUserSchema = z.object({
   avatarUrl: z.string().url().optional(),
 });
 
+export const updatePreferencesSchema = z.object({
+  auditCompleted: z.boolean().optional(),
+  weeklyReport: z.boolean().optional(),
+});
+
 export type RegisterSchema = z.infer<typeof registerSchema>;
 export type LoginSchema = z.infer<typeof loginSchema>;
+export type UpdatePreferencesSchema = z.infer<typeof updatePreferencesSchema>;

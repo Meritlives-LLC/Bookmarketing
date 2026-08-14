@@ -7,6 +7,7 @@ import calendarRoutes from './calendar.routes';
 import analyticsRoutes from './analytics.routes';
 import userRoutes from './user.routes';
 import billingRoutes from './billing.routes';
+import apiKeysRoutes from './apikeys.routes';
 
 const router = Router();
 
@@ -18,5 +19,6 @@ router.use('/calendar', calendarRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/user', userRoutes);
 router.use('/billing', billingRoutes);
+router.use('/api-keys', apiKeysRoutes);
 
 export default router;

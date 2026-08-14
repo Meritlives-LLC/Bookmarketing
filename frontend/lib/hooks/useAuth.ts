@@ -25,6 +25,10 @@ export function useAuth() {
   }, []);
 
   function logout() {
+    api.post("/auth/logout").catch(() => {
+      // Best-effort: cookies may already be expired. Client-side state is
+      // cleared regardless so the user is never stuck "logged in" locally.
+    });
     localStorage.removeItem("accessToken");
     localStorage.removeItem("refreshToken");
     setUser(null);

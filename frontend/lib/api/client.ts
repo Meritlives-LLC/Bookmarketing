@@ -78,7 +78,7 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
   isRetry = false
-): Promise<T> {
+): Promise<{ data: T; meta: Record<string, unknown> }> {
   const token = getAccessToken();
   const headers: HeadersInit = {
     "Content-Type": "application/json",
@@ -112,14 +112,28 @@ async function request<T>(
     );
   }
 
-  return (json.data !== undefined ? json.data : json) as T;
+  return {
+    data: (json.data !== undefined ? json.data : json) as T,
+    meta: json.meta ?? {},
+  };
 }
 
 export async function apiClient<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  return request<T>(path, options);
+  const { data } = await request<T>(path, options);
+  return data;
+}
+
+// Some endpoints (e.g. GET /analytics) return server-computed aggregates in
+// `meta` alongside `data`. The default `api.get` discards `meta` for
+// backwards compatibility with existing callers, so this variant is opt-in.
+export async function apiGetWithMeta<T, M = Record<string, unknown>>(
+  path: string
+): Promise<{ data: T; meta: M }> {
+  const { data, meta } = await request<T>(path);
+  return { data, meta: meta as M };
 }
 
 export const api = {
@@ -130,3 +144,32 @@ export const api = {
     apiClient<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => apiClient<T>(path, { method: "DELETE" }),
 };
+
+// For endpoints that return a raw file (e.g. Content-Disposition: attachment)
+// rather than the {success, data} envelope. Downloads the response as a file
+// in the browser instead of parsing it as JSON.
+export async function apiDownload(path: string, fallbackFilename: string): Promise<void> {
+  const token = getAccessToken();
+  const headers: HeadersInit = {};
+  if (token) (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}${path}`, { headers, credentials: "include" });
+  if (!res.ok) {
+    const json = await res.json().catch(() => ({}));
+    throw new ApiError(json?.error?.message || "Download failed", res.status, json?.error?.code);
+  }
+
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] || fallbackFilename;
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

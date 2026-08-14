@@ -25,7 +25,7 @@ router.post(
 );
 router.post(
   '/verify-email',
-  validate(z.object({ email: z.string().email(), token: z.string() })),
+  validate(z.object({ token: z.string().min(1) })),
   authController.verifyEmail
 );
 

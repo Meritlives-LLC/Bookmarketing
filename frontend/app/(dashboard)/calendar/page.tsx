@@ -12,12 +12,14 @@ import {
   ChevronRight,
   List,
   LayoutGrid,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { api, ApiError } from "@/lib/api/client";
-import type { Book, CalendarEvent } from "@/types";
+import type { Book, CalendarEvent, Platform } from "@/types";
 import { PLATFORM_LABELS } from "@/lib/constants/platforms";
 import { formatDate, cn } from "@/lib/utils";
 
@@ -39,6 +41,13 @@ function CalendarContent() {
   });
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverDay, setDragOverDay] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addForm, setAddForm] = useState({
+    platform: "FACEBOOK" as Platform,
+    scheduledAt: "",
+    notes: "",
+  });
 
   useEffect(() => {
     api.get<Book[]>("/books").then((b) => {
@@ -108,6 +117,40 @@ function CalendarContent() {
     }
   }
 
+  async function addEvent(e: React.FormEvent) {
+    e.preventDefault();
+    if (!bookId || !addForm.scheduledAt) return;
+    setAdding(true);
+    setError("");
+    try {
+      const created = await api.post<CalendarEvent>("/calendar", {
+        bookId,
+        platform: addForm.platform,
+        scheduledAt: new Date(addForm.scheduledAt).toISOString(),
+        notes: addForm.notes || undefined,
+      });
+      setEvents((prev) => [...prev, created]);
+      setShowAddForm(false);
+      setAddForm({ platform: "FACEBOOK", scheduledAt: "", notes: "" });
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed to add event");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function deleteEvent(id: string) {
+    if (!confirm("Remove this scheduled post?")) return;
+    const prevEvents = events;
+    setEvents((prev) => prev.filter((e) => e.id !== id));
+    try {
+      await api.delete(`/calendar/${id}`);
+    } catch (e) {
+      setEvents(prevEvents);
+      setError(e instanceof ApiError ? e.message : "Failed to delete event");
+    }
+  }
+
   const sorted = [...events].sort(
     (a, b) => new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()
   );
@@ -149,22 +192,66 @@ function CalendarContent() {
             AI-generated 30-day posting & campaign schedule
           </p>
         </div>
-        <Button
-          className="gap-2"
-          onClick={generate}
-          disabled={!bookId || genLoading}
-        >
-          {genLoading ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" /> Generating…
-            </>
-          ) : (
-            <>
-              <Plus className="h-4 w-4" /> Generate 30-day plan
-            </>
-          )}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            className="gap-2"
+            onClick={() => setShowAddForm((s) => !s)}
+            disabled={!bookId}
+          >
+            <Plus className="h-4 w-4" /> Add event
+          </Button>
+          <Button
+            className="gap-2"
+            onClick={generate}
+            disabled={!bookId || genLoading}
+          >
+            {genLoading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" /> Generating…
+              </>
+            ) : (
+              <>
+                <Plus className="h-4 w-4" /> Generate 30-day plan
+              </>
+            )}
+          </Button>
+        </div>
       </div>
+
+      {showAddForm && (
+        <Card>
+          <CardContent className="p-4">
+            <form onSubmit={addEvent} className="grid gap-3 sm:grid-cols-4">
+              <select
+                className="h-10 rounded-lg border border-input bg-background px-3 text-sm"
+                value={addForm.platform}
+                onChange={(e) => setAddForm((f) => ({ ...f, platform: e.target.value as Platform }))}
+              >
+                {Object.entries(PLATFORM_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+              <Input
+                type="datetime-local"
+                value={addForm.scheduledAt}
+                onChange={(e) => setAddForm((f) => ({ ...f, scheduledAt: e.target.value }))}
+                required
+              />
+              <Input
+                placeholder="Notes (optional)"
+                value={addForm.notes}
+                onChange={(e) => setAddForm((f) => ({ ...f, notes: e.target.value }))}
+                className="sm:col-span-1"
+              />
+              <Button type="submit" disabled={adding} className="gap-2">
+                {adding && <Loader2 className="h-4 w-4 animate-spin" />}
+                Add
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -383,6 +470,15 @@ function CalendarContent() {
                     <CheckCircle2 className="h-3.5 w-3.5" /> Done
                   </Button>
                 )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="shrink-0"
+                  onClick={() => deleteEvent(ev.id)}
+                  aria-label="Delete event"
+                >
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
               </CardContent>
             </Card>
           ))}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, TrendingUp, MousePointerClick, DollarSign, Loader2, Download } from "lucide-react";
+import { BarChart3, TrendingUp, MousePointerClick, DollarSign, Loader2, Download, Plus } from "lucide-react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -18,12 +18,13 @@ import {
   Cell,
 } from "recharts";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { api } from "@/lib/api/client";
-import type { AnalyticsSnapshot, Book } from "@/types";
+import { api, apiDownload, apiGetWithMeta, ApiError } from "@/lib/api/client";
+import type { AnalyticsSnapshot, Book, Platform } from "@/types";
 import { PLATFORM_LABELS } from "@/lib/constants/platforms";
-import { formatCurrency, formatNumber, exportToCsv } from "@/lib/utils";
+import { formatCurrency, formatNumber } from "@/lib/utils";
 
 const CHART_COLORS = [
   "hsl(262 83% 58%)",
@@ -37,12 +38,30 @@ const CHART_COLORS = [
   "hsl(330 81% 60%)",
 ];
 
+type Totals = { impressions: number; clicks: number; conversions: number; spend: number; revenue: number; cpc?: number; roas?: number };
+const EMPTY_TOTALS: Totals = { impressions: 0, clicks: 0, conversions: 0, spend: 0, revenue: 0 };
+
 export default function AnalyticsPage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [bookId, setBookId] = useState("");
   const [snapshots, setSnapshots] = useState<AnalyticsSnapshot[]>([]);
+  const [totals, setTotals] = useState<Totals>(EMPTY_TOTALS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [showLogForm, setShowLogForm] = useState(false);
+  const [logging, setLogging] = useState(false);
+  const [logForm, setLogForm] = useState({
+    platform: "FACEBOOK" as Platform,
+    date: new Date().toISOString().slice(0, 10),
+    impressions: "",
+    clicks: "",
+    conversions: "",
+    spend: "",
+    revenue: "",
+  });
 
   useEffect(() => {
     api.get<Book[]>("/books").then((b) => {
@@ -51,28 +70,28 @@ export default function AnalyticsPage() {
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
+  function loadSnapshots() {
     if (!bookId) return;
     setLoading(true);
-    api
-      .get<AnalyticsSnapshot[]>(`/analytics?bookId=${bookId}`)
-      .then(setSnapshots)
+    const params = new URLSearchParams({ bookId });
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    apiGetWithMeta<AnalyticsSnapshot[], { totals: Totals }>(`/analytics?${params.toString()}`)
+      .then(({ data, meta }) => {
+        setSnapshots(data);
+        setTotals(meta.totals ?? EMPTY_TOTALS);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [bookId]);
+  }
 
-  const totals = snapshots.reduce(
-    (acc, s) => ({
-      impressions: acc.impressions + s.impressions,
-      clicks: acc.clicks + s.clicks,
-      conversions: acc.conversions + s.conversions,
-      spend: acc.spend + Number(s.spend),
-      revenue: acc.revenue + Number(s.revenue),
-    }),
-    { impressions: 0, clicks: 0, conversions: 0, spend: 0, revenue: 0 }
-  );
-  const roas = totals.spend > 0 ? totals.revenue / totals.spend : 0;
-  const cpc = totals.clicks > 0 ? totals.spend / totals.clicks : 0;
+  useEffect(() => {
+    loadSnapshots();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId, from, to]);
+
+  const roas = totals.roas ?? (totals.spend > 0 ? totals.revenue / totals.spend : 0);
+  const cpc = totals.cpc ?? (totals.clicks > 0 ? totals.spend / totals.clicks : 0);
   const cps = totals.conversions > 0 ? totals.spend / totals.conversions : 0;
 
   // Trend: aggregate impressions/clicks/revenue by date across platforms.
@@ -106,20 +125,45 @@ export default function AnalyticsPage() {
       .filter((d) => d.value > 0);
   }, [snapshots]);
 
-  function handleExport() {
-    const book = books.find((b) => b.id === bookId);
-    exportToCsv(
-      `analytics-${book?.title || bookId}`,
-      snapshots.map((s) => ({
-        date: new Date(s.date).toISOString().slice(0, 10),
-        platform: PLATFORM_LABELS[s.platform] || s.platform,
-        impressions: s.impressions,
-        clicks: s.clicks,
-        conversions: s.conversions,
-        spend: Number(s.spend).toFixed(2),
-        revenue: Number(s.revenue).toFixed(2),
-      }))
-    );
+  async function handleExport() {
+    if (!bookId) return;
+    setExporting(true);
+    try {
+      const book = books.find((b) => b.id === bookId);
+      await apiDownload(`/analytics/export?bookId=${bookId}`, `analytics-${book?.title || bookId}.json`);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function submitLogForm(e: React.FormEvent) {
+    e.preventDefault();
+    if (!bookId) return;
+    setLogging(true);
+    setError("");
+    try {
+      await api.post("/analytics/refresh", {
+        bookId,
+        platform: logForm.platform,
+        date: logForm.date,
+        metrics: {
+          impressions: Number(logForm.impressions) || 0,
+          clicks: Number(logForm.clicks) || 0,
+          conversions: Number(logForm.conversions) || 0,
+          spend: Number(logForm.spend) || 0,
+          revenue: Number(logForm.revenue) || 0,
+        },
+      });
+      setShowLogForm(false);
+      setLogForm((f) => ({ ...f, impressions: "", clicks: "", conversions: "", spend: "", revenue: "" }));
+      loadSnapshots();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Failed to log data point");
+    } finally {
+      setLogging(false);
+    }
   }
 
   return (
@@ -144,17 +188,105 @@ export default function AnalyticsPage() {
               </option>
             ))}
           </select>
+          <Input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            className="h-10 w-[145px]"
+            aria-label="From date"
+          />
+          <Input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            className="h-10 w-[145px]"
+            aria-label="To date"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() => setShowLogForm((s) => !s)}
+            disabled={!bookId}
+          >
+            <Plus className="h-3.5 w-3.5" /> Log data
+          </Button>
           <Button
             variant="outline"
             size="sm"
             className="gap-2"
             onClick={handleExport}
-            disabled={snapshots.length === 0}
+            disabled={snapshots.length === 0 || exporting}
           >
-            <Download className="h-3.5 w-3.5" /> Export CSV
+            {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            Export
           </Button>
         </div>
       </div>
+
+      {showLogForm && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Log a data point</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={submitLogForm} className="grid gap-3 sm:grid-cols-3">
+              <select
+                className="h-10 rounded-lg border border-input bg-background px-3 text-sm"
+                value={logForm.platform}
+                onChange={(e) => setLogForm((f) => ({ ...f, platform: e.target.value as Platform }))}
+              >
+                {Object.entries(PLATFORM_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+              <Input
+                type="date"
+                value={logForm.date}
+                onChange={(e) => setLogForm((f) => ({ ...f, date: e.target.value }))}
+                required
+              />
+              <div />
+              <Input
+                type="number"
+                placeholder="Impressions"
+                value={logForm.impressions}
+                onChange={(e) => setLogForm((f) => ({ ...f, impressions: e.target.value }))}
+              />
+              <Input
+                type="number"
+                placeholder="Clicks"
+                value={logForm.clicks}
+                onChange={(e) => setLogForm((f) => ({ ...f, clicks: e.target.value }))}
+              />
+              <Input
+                type="number"
+                placeholder="Conversions"
+                value={logForm.conversions}
+                onChange={(e) => setLogForm((f) => ({ ...f, conversions: e.target.value }))}
+              />
+              <Input
+                type="number"
+                step="0.01"
+                placeholder="Spend ($)"
+                value={logForm.spend}
+                onChange={(e) => setLogForm((f) => ({ ...f, spend: e.target.value }))}
+              />
+              <Input
+                type="number"
+                step="0.01"
+                placeholder="Revenue ($)"
+                value={logForm.revenue}
+                onChange={(e) => setLogForm((f) => ({ ...f, revenue: e.target.value }))}
+              />
+              <Button type="submit" disabled={logging} className="gap-2">
+                {logging && <Loader2 className="h-4 w-4 animate-spin" />}
+                Save data point
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       {error && (
         <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">

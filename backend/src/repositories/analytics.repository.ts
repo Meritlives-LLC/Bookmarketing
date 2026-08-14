@@ -39,9 +39,19 @@ export const analyticsRepository = {
     });
   },
 
-  async aggregateForBook(bookId: string) {
+  async aggregateForBook(bookId: string, from?: Date, to?: Date) {
     const result = await prisma.analyticsSnapshot.aggregate({
-      where: { bookId },
+      where: {
+        bookId,
+        ...(from || to
+          ? {
+              date: {
+                ...(from ? { gte: from } : {}),
+                ...(to ? { lte: to } : {}),
+              },
+            }
+          : {}),
+      },
       _sum: { impressions: true, clicks: true, conversions: true, spend: true, revenue: true },
     });
     return result._sum;

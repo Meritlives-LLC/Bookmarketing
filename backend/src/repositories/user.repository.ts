@@ -6,8 +6,23 @@ export const userRepository = {
     return prisma.user.findUnique({ where: { id } });
   },
 
+  findByIdWithSubscription(id: string) {
+    return prisma.user.findUnique({ where: { id }, include: { subscription: true } });
+  },
+
+  updatePreferences(id: string, preferences: Record<string, boolean>) {
+    return prisma.user.update({
+      where: { id },
+      data: { emailPreferences: preferences },
+    });
+  },
+
   findByEmail(email: string): Promise<User | null> {
     return prisma.user.findUnique({ where: { email } });
+  },
+
+  findByEmailVerifyToken(token: string): Promise<User | null> {
+    return prisma.user.findFirst({ where: { emailVerifyToken: token } });
   },
 
   create(data: Prisma.UserCreateInput): Promise<User> {

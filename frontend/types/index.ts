@@ -70,9 +70,28 @@ export interface User {
   emailVerified: boolean;
   avatarUrl?: string | null;
   credits: number;
+  emailPreferences?: { auditCompleted?: boolean; weeklyReport?: boolean } | null;
   createdAt: string;
   lastLoginAt?: string | null;
   subscription?: Subscription | null;
+}
+
+export interface ApiKey {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  lastUsedAt?: string | null;
+  createdAt: string;
+  revokedAt?: string | null;
+}
+
+export interface BillingEvent {
+  id: string;
+  type: string;
+  amount?: number | null;
+  currency?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
 }
 
 export interface Subscription {

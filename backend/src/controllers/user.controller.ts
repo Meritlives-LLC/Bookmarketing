@@ -97,10 +97,11 @@ export const authController = {
   async verifyEmail(req: Request, res: Response, next: NextFunction) {
     try {
       const { token } = req.body;
-      const user = await userRepository.findByEmail(req.body.email ?? '');
-      if (user && user.emailVerifyToken === token) {
-        await userRepository.update(user.id, { emailVerified: true, emailVerifyToken: null });
+      const user = await userRepository.findByEmailVerifyToken(token);
+      if (!user) {
+        throw AppError.badRequest('Invalid or expired verification link', 'VERIFY_TOKEN_INVALID');
       }
+      await userRepository.update(user.id, { emailVerified: true, emailVerifyToken: null });
       res.json({ success: true, data: { message: 'Email verified' } });
     } catch (error) {
       next(error);
@@ -111,7 +112,7 @@ export const authController = {
 export const userController = {
   async me(req: Request, res: Response, next: NextFunction) {
     try {
-      const user = await userRepository.findById(req.user!.id);
+      const user = await userRepository.findByIdWithSubscription(req.user!.id);
       if (!user) return next();
       res.json({ success: true, data: omit(user, ['passwordHash', 'resetToken', 'emailVerifyToken']) });
     } catch (error) {
@@ -132,6 +133,18 @@ export const userController = {
     try {
       const user = await userRepository.findById(req.user!.id);
       res.json({ success: true, data: { credits: user?.credits ?? 0 } });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async updatePreferences(req: Request, res: Response, next: NextFunction) {
+    try {
+      const user = await userRepository.findById(req.user!.id);
+      const current = (user?.emailPreferences as Record<string, boolean>) ?? {};
+      const merged = { ...current, ...req.body };
+      const updated = await userRepository.updatePreferences(req.user!.id, merged);
+      res.json({ success: true, data: { emailPreferences: updated.emailPreferences } });
     } catch (error) {
       next(error);
     }

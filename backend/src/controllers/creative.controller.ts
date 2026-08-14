@@ -51,7 +51,14 @@ export const creativeController = {
   async download(req: Request, res: Response, next: NextFunction) {
     try {
       const creative = await creativeService.getById(req.params.id, req.user!.id);
-      res.json({ success: true, data: creative.content });
+      const body =
+        typeof creative.content === 'object'
+          ? JSON.stringify(creative.content, null, 2)
+          : String(creative.content);
+      const safeName = (creative.title || creative.type).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName || 'creative'}.json"`);
+      res.send(body);
     } catch (error) {
       next(error);
     }

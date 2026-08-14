@@ -3,6 +3,7 @@ export const PLANS = [
     id: "FREE",
     name: "Free",
     price: 0,
+    priceId: "",
     description: "Get started and explore the platform",
     features: [
       "1 book",
@@ -17,6 +18,7 @@ export const PLANS = [
     id: "STARTER",
     name: "Starter",
     price: 29,
+    priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_STARTER || "",
     description: "For authors launching their first campaigns",
     features: [
       "3 books",
@@ -33,6 +35,7 @@ export const PLANS = [
     id: "PRO",
     name: "Pro",
     price: 79,
+    priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_PRO || "",
     description: "Full marketing OS for serious authors",
     features: [
       "Unlimited books",
@@ -51,6 +54,7 @@ export const PLANS = [
     id: "AGENCY",
     name: "Agency",
     price: 199,
+    priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_AGENCY || "",
     description: "For teams and author service businesses",
     features: [
       "Everything in Pro",
@@ -60,7 +64,7 @@ export const PLANS = [
       "Dedicated success manager",
       "Custom integrations",
     ],
-    cta: "Contact sales",
+    cta: "Go Agency",
     popular: false,
   },
 ] as const;

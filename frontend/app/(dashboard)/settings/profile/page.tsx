@@ -7,18 +7,21 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { api, ApiError } from "@/lib/api/client";
 import type { User } from "@/types";
 
 export default function ProfileSettingsPage() {
   const [form, setForm] = useState({ firstName: "", lastName: "", email: "" });
+  const [user, setUser] = useState<User | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
-    api.get<User>("/user").then((u) =>
-      setForm({ firstName: u.firstName, lastName: u.lastName, email: u.email })
-    ).catch(() => {});
+    api.get<User>("/user").then((u) => {
+      setUser(u);
+      setForm({ firstName: u.firstName, lastName: u.lastName, email: u.email });
+    }).catch(() => {});
   }, []);
 
   async function onSubmit(e: React.FormEvent) {
@@ -41,6 +44,27 @@ export default function ProfileSettingsPage() {
         <ArrowLeft className="h-4 w-4" /> Settings
       </Link>
       <h1 className="text-2xl font-bold">Profile</h1>
+
+      {user && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base">Plan & usage</CardTitle>
+            <Badge variant={user.subscription?.plan && user.subscription.plan !== "FREE" ? "success" : "secondary"}>
+              {user.subscription?.plan ?? "FREE"}
+            </Badge>
+          </CardHeader>
+          <CardContent className="flex items-center justify-between">
+            <div>
+              <p className="text-2xl font-bold">{user.credits}</p>
+              <p className="text-sm text-muted-foreground">credits remaining</p>
+            </div>
+            <Link href="/settings/billing">
+              <Button variant="outline" size="sm">Manage plan</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader><CardTitle className="text-base">Personal info</CardTitle></CardHeader>
         <CardContent>
@@ -55,7 +79,14 @@ export default function ProfileSettingsPage() {
               <Input value={form.lastName} onChange={(e) => setForm((f) => ({ ...f, lastName: e.target.value }))} />
             </div>
             <div className="space-y-2">
-              <Label>Email</Label>
+              <Label className="flex items-center gap-2">
+                Email
+                {user && (
+                  <Badge variant={user.emailVerified ? "success" : "warning"}>
+                    {user.emailVerified ? "Verified" : "Unverified"}
+                  </Badge>
+                )}
+              </Label>
               <Input value={form.email} disabled />
             </div>
             <Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
