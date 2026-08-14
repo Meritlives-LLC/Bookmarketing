@@ -31,6 +31,17 @@ export const creativeRepository = {
     return prisma.creative.update({ where: { id }, data: { status, ...extra } });
   },
 
+  /** Active (READY/PUBLISHED) creatives for a book on a given platform — the pool eligible to be auto-paused. */
+  findActiveForBookAndPlatform(bookId: string, platform: Prisma.CreativeWhereInput['platform']) {
+    return prisma.creative.findMany({
+      where: { bookId, platform, status: { in: [CreativeStatus.READY, CreativeStatus.PUBLISHED] } },
+    });
+  },
+
+  archiveMany(ids: string[]) {
+    return prisma.creative.updateMany({ where: { id: { in: ids } }, data: { status: CreativeStatus.ARCHIVED } });
+  },
+
   update(id: string, data: Prisma.CreativeUpdateInput): Promise<Creative> {
     return prisma.creative.update({ where: { id }, data });
   },

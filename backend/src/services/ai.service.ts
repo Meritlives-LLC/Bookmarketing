@@ -90,6 +90,22 @@ export const aiService = {
     );
   },
 
+  async generatePodcastPitch(book: Book) {
+    return withFallback(
+      'generatePodcastPitch',
+      () => groqAiService.generatePodcastPitch(book),
+      () => localAiService.generatePodcastPitch(book)
+    );
+  },
+
+  async generateRedditPost(book: Book) {
+    return withFallback(
+      'generateRedditPost',
+      () => groqAiService.generateRedditPost(book),
+      () => localAiService.generateRedditPost(book)
+    );
+  },
+
   async generateCalendar(book: Book, days: number) {
     return withFallback(
       'generateCalendar',

@@ -197,6 +197,29 @@ export interface AnalyticsSnapshot {
   revenue: number;
 }
 
+export interface PlatformPerformance {
+  platform: Platform;
+  spend: number;
+  revenue: number;
+  roas: number;
+  status: "winning" | "underperforming" | "insufficient-data";
+}
+
+export interface BudgetShiftRecommendation {
+  fromPlatform: Platform;
+  toPlatform: Platform;
+  suggestedShiftAmount: number;
+  reason: string;
+}
+
+export interface OptimizationResult {
+  platformPerformance: PlatformPerformance[];
+  pausedCreatives: { id: string; platform: Platform; title: string | null }[];
+  canceledEvents: { id: string; platform: Platform; scheduledAt: string }[];
+  recommendations: BudgetShiftRecommendation[];
+  ranAt: string;
+}
+
 export interface Notification {
   id: string;
   title: string;

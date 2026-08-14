@@ -76,6 +76,18 @@ export const creativeService = {
           title = `Amazon keywords — ${book.title}`;
           break;
         }
+        case CreativeType.PODCAST_PITCH: {
+          const pitch = await aiService.generatePodcastPitch(book);
+          content = pitch;
+          title = pitch.subject;
+          break;
+        }
+        case CreativeType.REDDIT_POST: {
+          const post = await aiService.generateRedditPost(book);
+          content = post;
+          title = post.title;
+          break;
+        }
         default: {
           const ad = await aiService.generateAdCopy(
             book,

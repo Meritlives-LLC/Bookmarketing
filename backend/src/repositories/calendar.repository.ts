@@ -36,6 +36,13 @@ export const calendarRepository = {
     return prisma.calendarEvent.update({ where: { id }, data });
   },
 
+  /** Future, still-scheduled events for a book on a given platform — the pool eligible to be auto-paused. */
+  findUpcomingScheduledForBookAndPlatform(bookId: string, platform: Prisma.CalendarEventWhereInput['platform']) {
+    return prisma.calendarEvent.findMany({
+      where: { bookId, platform, status: CalendarEventStatus.SCHEDULED, scheduledAt: { gte: new Date() } },
+    });
+  },
+
   markCompleted(id: string): Promise<CalendarEvent> {
     return prisma.calendarEvent.update({
       where: { id },

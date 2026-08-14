@@ -111,6 +111,27 @@ export const groqAiService = {
     return result.questions.join('\n');
   },
 
+  async generatePodcastPitch(book: Book) {
+    const prompt =
+      `${bookContext(book)}\n\nWrite a cold-outreach pitch email an author would send to a book-focused podcast host to ask for an interview.\n` +
+      `Return a JSON object: {"subject": string (under 10 words, specific — not "Interview request"), ` +
+      `"body": string (4-5 short paragraphs: personalized opener referencing why this show/genre fits, 1-2 sentence book hook, 2-3 concrete talking points/angles the author could discuss on air, and a low-friction close), ` +
+      `"talkingPoints": string[] (3-4 specific discussion angles a host could use in the show notes)}.`;
+    return askJSON<{ subject: string; body: string; talkingPoints: string[] }>(prompt, { temperature: 0.8 });
+  },
+
+  async generateRedditPost(book: Book) {
+    const prompt =
+      `${bookContext(book)}\n\nWrite a Reddit post an author could share in a relevant book-discussion subreddit (e.g. r/books, r/Fantasy, r/RomanceBooks depending on genre) that reads as a genuine community contribution, not an ad.\n` +
+      `Follow standard Reddit self-promotion norms: transparent about being the author, value-first, no hard sell, no link-dropping in the body.\n` +
+      `Return a JSON object: {"suggestedSubreddit": string, "title": string (Reddit-style post title, under 15 words, no clickbait/emoji), ` +
+      `"body": string (3-4 short paragraphs: genuine context or a craft/genre question tied to the book, brief transparent mention of authorship, an actual question inviting discussion), ` +
+      `"flairSuggestion": string}.`;
+    return askJSON<{ suggestedSubreddit: string; title: string; body: string; flairSuggestion: string }>(prompt, {
+      temperature: 0.8,
+    });
+  },
+
   async generateCalendar(book: Book, days: number) {
     const prompt =
       `${bookContext(book)}\n\nBuild a ${Math.min(days, 30)}-day launch marketing calendar (up to 10 key posting events spread across the window).\n` +

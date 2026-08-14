@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, TrendingUp, MousePointerClick, DollarSign, Loader2, Download, Plus } from "lucide-react";
+import { BarChart3, TrendingUp, MousePointerClick, DollarSign, Loader2, Download, Plus, Zap, PauseCircle, ArrowRightLeft } from "lucide-react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { api, apiDownload, apiGetWithMeta, ApiError } from "@/lib/api/client";
-import type { AnalyticsSnapshot, Book, Platform } from "@/types";
+import type { AnalyticsSnapshot, Book, Platform, OptimizationResult } from "@/types";
 import { PLATFORM_LABELS } from "@/lib/constants/platforms";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
@@ -53,6 +53,8 @@ export default function AnalyticsPage() {
   const [exporting, setExporting] = useState(false);
   const [showLogForm, setShowLogForm] = useState(false);
   const [logging, setLogging] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
+  const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null);
   const [logForm, setLogForm] = useState({
     platform: "FACEBOOK" as Platform,
     date: new Date().toISOString().slice(0, 10),
@@ -124,6 +126,20 @@ export default function AnalyticsPage() {
       .map(([name, value]) => ({ name, value }))
       .filter((d) => d.value > 0);
   }, [snapshots]);
+
+  async function handleOptimize() {
+    if (!bookId) return;
+    setOptimizing(true);
+    setError("");
+    try {
+      const result = await api.post<OptimizationResult>("/analytics/optimize", { bookId });
+      setOptimizationResult(result);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Optimization run failed");
+    } finally {
+      setOptimizing(false);
+    }
+  }
 
   async function handleExport() {
     if (!bookId) return;
@@ -221,8 +237,107 @@ export default function AnalyticsPage() {
             {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
             Export
           </Button>
+          <Button
+            size="sm"
+            className="gap-2"
+            onClick={handleOptimize}
+            disabled={!bookId || snapshots.length === 0 || optimizing}
+          >
+            {optimizing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+            Run Auto-Optimization
+          </Button>
         </div>
       </div>
+
+      {optimizationResult && (
+        <Card className="border-primary/30">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Zap className="h-4 w-4 text-primary" />
+              Optimization results
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <p className="text-sm text-muted-foreground">
+              Ran {new Date(optimizationResult.ranAt).toLocaleString()} — based on the analytics you've logged for
+              this book. Platforms need at least $20 in recorded spend before they're judged, and "underperforming"
+              means ROAS below 1.0x (spend isn't earning itself back).
+            </p>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {optimizationResult.platformPerformance.map((p) => (
+                <div
+                  key={p.platform}
+                  className="rounded-lg border px-4 py-3 text-sm"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">{PLATFORM_LABELS[p.platform] || p.platform}</span>
+                    <Badge
+                      variant={
+                        p.status === "winning" ? "default" : p.status === "underperforming" ? "destructive" : "outline"
+                      }
+                    >
+                      {p.status === "insufficient-data" ? "Not enough data" : p.status === "winning" ? "Winning" : "Underperforming"}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 text-muted-foreground">
+                    ROAS {p.roas.toFixed(2)}x · Spend {formatCurrency(p.spend)}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {(optimizationResult.pausedCreatives.length > 0 || optimizationResult.canceledEvents.length > 0) && (
+              <div>
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <PauseCircle className="h-4 w-4 text-destructive" />
+                  Paused for underperformance
+                </div>
+                <ul className="space-y-1 text-sm text-muted-foreground">
+                  {optimizationResult.pausedCreatives.map((c) => (
+                    <li key={c.id}>
+                      Creative "{c.title || "Untitled"}" on {PLATFORM_LABELS[c.platform] || c.platform} — archived
+                    </li>
+                  ))}
+                  {optimizationResult.canceledEvents.map((e) => (
+                    <li key={e.id}>
+                      Scheduled post on {PLATFORM_LABELS[e.platform] || e.platform} (
+                      {new Date(e.scheduledAt).toLocaleDateString()}) — canceled
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {optimizationResult.pausedCreatives.length === 0 && optimizationResult.canceledEvents.length === 0 && (
+              <p className="text-sm text-muted-foreground">Nothing needed pausing this run.</p>
+            )}
+
+            {optimizationResult.recommendations.length > 0 && (
+              <div>
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+                  <ArrowRightLeft className="h-4 w-4 text-primary" />
+                  Suggested budget shifts
+                </div>
+                <ul className="space-y-2 text-sm">
+                  {optimizationResult.recommendations.map((r, i) => (
+                    <li key={i} className="rounded-lg border px-3 py-2">
+                      <div className="font-medium">
+                        Move {formatCurrency(r.suggestedShiftAmount)} from {PLATFORM_LABELS[r.fromPlatform] || r.fromPlatform}{" "}
+                        to {PLATFORM_LABELS[r.toPlatform] || r.toPlatform}
+                      </div>
+                      <p className="mt-1 text-muted-foreground">{r.reason}</p>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  These are recommendations only — no ad account is connected, so budgets aren't moved automatically.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {showLogForm && (
         <Card>

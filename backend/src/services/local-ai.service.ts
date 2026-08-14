@@ -405,6 +405,79 @@ export const localAiService = {
     ].join('\n');
   },
 
+  async generatePodcastPitch(book: Book) {
+    const seed = seedFrom(book.id, 'podcast');
+    const { hookSentence, nounPhrases, protagonist } = analyzeBook(book);
+    const genre = genreLabel(book.genre);
+
+    const subjects = [
+      `${genre} author pitch — "${book.title}"`,
+      `Guest idea: the story behind "${book.title}"`,
+      `Would "${book.title}" fit your show?`,
+    ];
+
+    const angleBank = [
+      `what drew me to write a ${genre} story in the first place`,
+      `the research/craft choices behind ${nounPhrases[0] ?? 'the book\'s central premise'}`,
+      protagonist ? `why ${protagonist}'s arc turned out differently than I originally planned` : `how the story's central conflict evolved during drafting`,
+      `what I'd tell someone starting their first ${genre} manuscript`,
+    ];
+    const talkingPoints = pickMany(angleBank, seed, 3);
+
+    const body =
+      `Hi [Host name],\n\nI'm a longtime listener of the show and really enjoyed your recent episodes on ${genre} storytelling. ` +
+      `I write ${genre} fiction, and my latest book, "${book.title}," ${stripLeadingConjunction(hookSentence).toLowerCase()}\n\n` +
+      `I'd love to come on and talk about ${talkingPoints.slice(0, 2).join(' and ')} — happy to tailor it to whatever's most useful for your audience.\n\n` +
+      `No pressure at all if it's not a fit right now — either way, keep up the great work on the show.\n\nBest,\n[Your name]`;
+
+    return { subject: pick(subjects, seed), body, talkingPoints };
+  },
+
+  async generateRedditPost(book: Book) {
+    const seed = seedFrom(book.id, 'reddit');
+    const { nounPhrases, protagonist } = analyzeBook(book);
+    const genre = genreLabel(book.genre);
+
+    const subredditByGenre: Record<string, string> = {
+      ROMANCE: 'r/RomanceBooks',
+      ROMANTASY: 'r/RomanceBooks',
+      FANTASY: 'r/Fantasy',
+      SCI_FI: 'r/printSF',
+      THRILLER: 'r/thriller',
+      MYSTERY: 'r/mysterybooks',
+      YA: 'r/YAlit',
+      LITERARY_FICTION: 'r/literaryfiction',
+      HISTORICAL_FICTION: 'r/HistoricalFiction',
+      NON_FICTION: 'r/nonfictionbooks',
+      MEMOIR: 'r/memoir',
+      SELF_HELP: 'r/selfhelpbooks',
+      BUSINESS: 'r/business',
+      HORROR: 'r/horrorlit',
+      LITRPG: 'r/litrpg',
+      OTHER: 'r/books',
+    };
+    const suggestedSubreddit = subredditByGenre[book.genre] ?? 'r/books';
+
+    const titles = [
+      `What's a ${genre} trope you never get tired of? (wrote a book chasing this one)`,
+      `Looking for feedback: does this ${genre} premise sound overdone?`,
+      `${titleCase(genre)} readers — what makes a ${nounPhrases[0] ?? 'setting'} feel real to you?`,
+    ];
+
+    const body =
+      `I've been thinking a lot about ${nounPhrases[0] ?? 'this trope'} in ${genre} lately — specifically ` +
+      `${protagonist ? `how a character like ${protagonist} could realistically react to it` : 'how it plays out when the stakes are personal rather than world-ending'}. ` +
+      `Full disclosure, I'm an author (my own book "${book.title}" leans into this), so take my read with a grain of salt.\n\n` +
+      `Curious what this sub thinks makes that kind of moment land vs. feel forced — any favorite examples, mine or otherwise?`;
+
+    return {
+      suggestedSubreddit,
+      title: pick(titles, seed),
+      body,
+      flairSuggestion: 'Discussion',
+    };
+  },
+
   async generateCalendar(book: Book, days: number) {
     const seed = seedFrom(book.id, 'calendar');
     const platforms = ['INSTAGRAM', 'TIKTOK', 'FACEBOOK', 'EMAIL', 'REDDIT', 'AMAZON'];
