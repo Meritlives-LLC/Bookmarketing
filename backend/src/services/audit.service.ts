@@ -3,7 +3,7 @@ import { auditRepository } from '../repositories/audit.repository';
 import { bookRepository } from '../repositories/book.repository';
 import { AppError } from '../utils/helpers';
 import { aiService } from './ai.service';
-import { scraperService } from './scraper.service';
+import { scraperService, combineScrapedContext } from './scraper.service';
 import { logger } from '../utils/logger';
 
 const SEGMENT_PLATFORM_MAP: Array<{ segment: ReaderSegment; platform: Platform }> = [
@@ -49,17 +49,26 @@ export const auditService = {
 
       const book = audit.book;
 
-      await Promise.allSettled([
+      const [goodreadsResult, amazonResult, redditResult] = await Promise.allSettled([
         book.goodreadsUrl ? scraperService.scrapeGoodreads(book.goodreadsUrl) : Promise.resolve(null),
         book.amazonUrl ? scraperService.scrapeAmazon(book.amazonUrl) : Promise.resolve(null),
         scraperService.scrapeRedditMentions(book.genre),
+      ]);
+
+      // Feed what was actually scraped into the AI step as grounding context
+      // instead of discarding it — a settled-but-null/errored scrape just
+      // contributes nothing, it doesn't fail the audit.
+      const scrapedContext = combineScrapedContext([
+        goodreadsResult.status === 'fulfilled' ? goodreadsResult.value : null,
+        amazonResult.status === 'fulfilled' ? amazonResult.value : null,
+        redditResult.status === 'fulfilled' ? redditResult.value : null,
       ]);
 
       await auditRepository.updateStatus(auditId, AuditStatus.ANALYZING);
 
       const insights = await Promise.all(
         SEGMENT_PLATFORM_MAP.map(async ({ segment, platform }) => {
-          const result = await aiService.generateAudienceInsight(book, segment, platform);
+          const result = await aiService.generateAudienceInsight(book, segment, platform, scrapedContext);
           return {
             segment,
             platform,
@@ -71,13 +80,13 @@ export const auditService = {
       );
       await auditRepository.addAudienceInsights(auditId, insights);
 
-      const keywordResult = await aiService.generateKeywordSuggestions(book);
+      const keywordResult = await aiService.generateKeywordSuggestions(book, scrapedContext);
       await auditRepository.addKeywordSuggestions(
         auditId,
         keywordResult.keywords.map((k) => ({ ...k, platform: Platform.AMAZON }))
       );
 
-      const competitorResult = await aiService.generateCompetitorAnalysis(book);
+      const competitorResult = await aiService.generateCompetitorAnalysis(book, scrapedContext);
       await auditRepository.addCompetitorAnalyses(auditId, competitorResult.competitors);
 
       await auditRepository.markCompleted(auditId);

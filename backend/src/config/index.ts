@@ -132,6 +132,25 @@ export const config = {
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:3000',
 
   logLevel: process.env.LOG_LEVEL ?? 'info',
+
+  ai: {
+    groq: (() => {
+      const apiKey = (process.env.GROQ_API_KEY ?? '').trim();
+      return {
+        // Groq's free-tier, OpenAI-compatible chat completions API.
+        // https://console.groq.com — no card required for the free/dev tier.
+        enabled: apiKey.length > 0,
+        apiKey,
+        baseUrl: process.env.GROQ_BASE_URL ?? 'https://api.groq.com/openai/v1',
+        // openai/gpt-oss-120b is Groq's current recommended general-purpose
+        // model (llama-3.3-70b-versatile was deprecated June 2026). Override
+        // via GROQ_MODEL without a code change if Groq retires this one too.
+        model: process.env.GROQ_MODEL ?? 'openai/gpt-oss-120b',
+        timeoutMs: parseInt(process.env.GROQ_TIMEOUT_MS ?? '20000', 10),
+        maxRetries: parseInt(process.env.GROQ_MAX_RETRIES ?? '2', 10),
+      };
+    })(),
+  },
 };
 
 export type Config = typeof config;
