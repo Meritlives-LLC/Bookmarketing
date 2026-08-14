@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api, ApiError } from "@/lib/api/client";
 import { GENRES } from "@/lib/constants/genres";
+import { parseAmazonUrl } from "@/lib/amazon";
 import type { BookGenre } from "@/types";
 
 export default function NewBookPage() {
@@ -31,9 +32,30 @@ export default function NewBookPage() {
     setForm((f) => ({ ...f, [field]: value }));
   }
 
+  function onAmazonUrlChange(value: string) {
+    const parsed = parseAmazonUrl(value);
+    setForm((f) => ({
+      ...f,
+      amazonUrl: value,
+      // Only auto-fill when we found something; don't wipe user edits if
+      // the URL doesn't contain an ASIN/ISBN (e.g. partial paste).
+      asin: parsed.asin ?? f.asin,
+      isbn: parsed.isbn ?? f.isbn,
+    }));
+  }
+
+  const hasProviderUrl =
+    Boolean(form.amazonUrl.trim()) || Boolean(form.goodreadsUrl.trim());
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+
+    if (!hasProviderUrl) {
+      setError("Add at least one store link (Amazon or Goodreads) so we can find your book.");
+      return;
+    }
+
     setLoading(true);
     try {
       const body = {
@@ -123,12 +145,18 @@ export default function NewBookPage() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm font-medium">Amazon URL</label>
+                <label className="text-sm font-medium">
+                  Amazon URL <span className="text-muted-foreground font-normal">(or Goodreads)</span>
+                </label>
                 <Input
                   value={form.amazonUrl}
-                  onChange={(e) => update("amazonUrl", e.target.value)}
+                  onChange={(e) => onAmazonUrlChange(e.target.value)}
                   placeholder="https://amazon.com/dp/..."
+                  inputMode="url"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Paste a product link — ASIN / ISBN fill in automatically when present.
+                </p>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium">Goodreads URL</label>
@@ -136,6 +164,7 @@ export default function NewBookPage() {
                   value={form.goodreadsUrl}
                   onChange={(e) => update("goodreadsUrl", e.target.value)}
                   placeholder="https://goodreads.com/book/..."
+                  inputMode="url"
                 />
               </div>
             </div>
@@ -153,6 +182,7 @@ export default function NewBookPage() {
                 <Input
                   value={form.isbn}
                   onChange={(e) => update("isbn", e.target.value)}
+                  placeholder="978…"
                 />
               </div>
               <div className="space-y-2">
@@ -167,7 +197,7 @@ export default function NewBookPage() {
               </div>
             </div>
             <div className="flex gap-3 pt-2">
-              <Button type="submit" disabled={loading}>
+              <Button type="submit" disabled={loading || !hasProviderUrl}>
                 {loading ? "Saving…" : "Save book"}
               </Button>
               <Link href="/books">
@@ -176,6 +206,11 @@ export default function NewBookPage() {
                 </Button>
               </Link>
             </div>
+            {!hasProviderUrl && (
+              <p className="text-xs text-muted-foreground">
+                Add at least one of Amazon URL or Goodreads URL to enable Save.
+              </p>
+            )}
           </form>
         </CardContent>
       </Card>

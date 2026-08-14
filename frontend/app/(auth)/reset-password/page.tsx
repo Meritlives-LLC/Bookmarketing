@@ -65,9 +65,14 @@ function ResetForm() {
           </div>
         )}
         <div className="space-y-2">
-          <label className="text-sm font-medium">New password</label>
+          <label className="text-sm font-medium" htmlFor="new-password">
+            New password
+          </label>
           <Input
+            id="new-password"
+            name="new-password"
             type="password"
+            autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
@@ -75,9 +80,14 @@ function ResetForm() {
           />
         </div>
         <div className="space-y-2">
-          <label className="text-sm font-medium">Confirm password</label>
+          <label className="text-sm font-medium" htmlFor="confirm-password">
+            Confirm password
+          </label>
           <Input
+            id="confirm-password"
+            name="confirm-password"
             type="password"
+            autoComplete="new-password"
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
             required

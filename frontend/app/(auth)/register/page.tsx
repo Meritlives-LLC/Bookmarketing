@@ -62,6 +62,8 @@ export default function RegisterPage() {
             </label>
             <Input
               id="firstName"
+              name="firstName"
+              autoComplete="given-name"
               value={form.firstName}
               onChange={(e) => update("firstName", e.target.value)}
               required
@@ -73,6 +75,8 @@ export default function RegisterPage() {
             </label>
             <Input
               id="lastName"
+              name="lastName"
+              autoComplete="family-name"
               value={form.lastName}
               onChange={(e) => update("lastName", e.target.value)}
               required
@@ -85,7 +89,9 @@ export default function RegisterPage() {
           </label>
           <Input
             id="email"
+            name="email"
             type="email"
+            autoComplete="email"
             placeholder="you@example.com"
             value={form.email}
             onChange={(e) => update("email", e.target.value)}
@@ -98,7 +104,9 @@ export default function RegisterPage() {
           </label>
           <Input
             id="password"
+            name="password"
             type="password"
+            autoComplete="new-password"
             placeholder="At least 8 characters"
             value={form.password}
             onChange={(e) => update("password", e.target.value)}

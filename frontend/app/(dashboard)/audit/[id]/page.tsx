@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -25,9 +25,9 @@ import { cn } from "@/lib/utils";
 export default function AuditDetailPage({
   params,
 }: {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }) {
-  const { id } = use(params);
+  const { id } = params;
   const [audit, setAudit] = useState<Audit | null>(null);
   const [loading, setLoading] = useState(true);
   const [regenLoading, setRegenLoading] = useState(false);

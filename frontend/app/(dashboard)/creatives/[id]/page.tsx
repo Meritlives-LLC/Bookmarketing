@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Copy, Check, Trash2, Loader2, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,9 +14,9 @@ import { formatDate } from "@/lib/utils";
 export default function CreativeDetailPage({
   params,
 }: {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }) {
-  const { id } = use(params);
+  const { id } = params;
   const [creative, setCreative] = useState<Creative | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);

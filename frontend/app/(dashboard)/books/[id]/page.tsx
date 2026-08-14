@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -24,9 +24,9 @@ import { formatDate } from "@/lib/utils";
 export default function BookDetailPage({
   params,
 }: {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }) {
-  const { id } = use(params);
+  const { id } = params;
   const router = useRouter();
   const [book, setBook] = useState<Book | null>(null);
   const [audits, setAudits] = useState<Audit[]>([]);
