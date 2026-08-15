@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, use } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -25,9 +25,9 @@ import { cn } from "@/lib/utils";
 export default function AuditDetailPage({
   params,
 }: {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }) {
-  const { id } = params;
+  const { id } = use(params);
   const [audit, setAudit] = useState<Audit | null>(null);
   const [loading, setLoading] = useState(true);
   const [regenLoading, setRegenLoading] = useState(false);
@@ -38,22 +38,51 @@ export default function AuditDetailPage({
     return api
       .get<Audit>(`/audit/${id}`)
       .then(setAudit)
-      .catch((e) => setError(e.message || "Failed to load audit"));
+      .catch((e) => {
+        setError(e.message || "Failed to load audit");
+        throw e;
+      });
   }
 
   useEffect(() => {
-    load().finally(() => setLoading(false));
+    load()
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, [id]);
 
-  // Poll while processing
+  // Poll while processing — slower interval + backoff so we don't trip rate limits (429)
   useEffect(() => {
     if (!audit) return;
-    if (["PENDING", "SCRAPING", "ANALYZING"].includes(audit.status)) {
-      const t = setInterval(() => {
-        load().catch(() => {});
-      }, 4000);
-      return () => clearInterval(t);
-    }
+    if (!["PENDING", "SCRAPING", "ANALYZING"].includes(audit.status)) return;
+
+    let cancelled = false;
+    let delayMs = 8000;
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        await load();
+        delayMs = 8000;
+      } catch (e) {
+        const status =
+          e && typeof e === "object" && "status" in e
+            ? (e as { status: number }).status
+            : 0;
+        if (status === 429) {
+          delayMs = Math.min(delayMs * 2, 60000);
+        }
+      }
+      if (!cancelled) {
+        timeoutId = setTimeout(tick, delayMs);
+      }
+    };
+
+    timeoutId = setTimeout(tick, delayMs);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
   }, [audit?.status, id]);
 
   async function regenerate() {

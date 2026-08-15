@@ -120,6 +120,14 @@ async function request<T>(
 
   if (!res.ok) {
     const code = json?.error?.code;
+
+    // One delayed retry on rate limit — status polls should not spam 429 forever
+    // and must never clear the session.
+    if (!isRetry && res.status === 429) {
+      await new Promise((r) => setTimeout(r, 3000));
+      return request<T>(path, options, true);
+    }
+
     // Only ever attempt one silent refresh+retry per request to avoid loops.
     if (!isRetry && res.status === 401 && code === "TOKEN_EXPIRED") {
       const newToken = await refreshAccessToken();
@@ -127,6 +135,7 @@ async function request<T>(
         return request<T>(path, options, true);
       }
     }
+    // 401 only — never logout on 429 or other errors
     if (res.status === 401 && !isAuthFlowPath(path)) {
       redirectToLogin();
     }
