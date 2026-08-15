@@ -1,17 +1,10 @@
 /**
- * `aiService` is the stable entry point every consumer (audit worker,
- * creative service, calendar service, etc.) imports — none of them need to
- * know or care which backend actually produced the content.
+ * Stable AI entry point.
  *
- * Backend selection:
- *  - `GROQ_API_KEY` set  → try `groqAiService` (real LLM, Groq's free tier).
- *  - not set, or a Groq call fails/times out/returns bad JSON → fall back to
- *    `localAiService` (offline, template + NLP based, zero cost, zero
- *    network dependency — see `local-ai.service.ts`).
- *
- * This keeps the app fully functional with no API key and no network access
- * (the original design goal of `localAiService`), while producing genuinely
- * generated, audience-research-grounded copy whenever Groq is reachable.
+ * - GROQ_API_KEY set → try Groq (with timeout)
+ * - timeout, rate limit, or any error → localAiService (templates / offline)
+ * - After several consecutive Groq failures, skip Groq for the rest of the
+ *   process lifetime so audits finish quickly on free-tier TPM limits.
  */
 import { Book } from '@prisma/client';
 import { config } from '../config';
@@ -19,22 +12,82 @@ import { localAiService } from './local-ai.service';
 import { groqAiService } from './groq-ai.service';
 import { logger } from '../utils/logger';
 
-async function withFallback<T>(label: string, groqCall: () => Promise<T>, localCall: () => Promise<T>): Promise<T> {
-  if (!config.ai.groq.enabled) {
+/** Hard ceiling for one Groq attempt (includes its internal retries). */
+const GROQ_CALL_TIMEOUT_MS = Math.max(
+  5_000,
+  parseInt(process.env.GROQ_FALLBACK_TIMEOUT_MS ?? '', 10) ||
+    config.ai.groq.timeoutMs ||
+    20_000
+);
+
+/** After this many consecutive failures, stop calling Groq until process restart. */
+const MAX_CONSECUTIVE_FAILURES = 3;
+
+let consecutiveFailures = 0;
+let groqCircuitOpen = false;
+
+function openCircuit(reason: string): void {
+  if (!groqCircuitOpen) {
+    groqCircuitOpen = true;
+    logger.warn('Groq circuit open — using local-ai for remaining calls', { reason });
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Groq timed out after ${ms}ms (${label})`)),
+      ms
+    );
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function withFallback<T>(
+  label: string,
+  groqCall: () => Promise<T>,
+  localCall: () => Promise<T>
+): Promise<T> {
+  if (!config.ai.groq.enabled || groqCircuitOpen) {
     return localCall();
   }
+
   try {
-    return await groqCall();
+    const result = await withTimeout(groqCall(), GROQ_CALL_TIMEOUT_MS, label);
+    consecutiveFailures = 0;
+    return result;
   } catch (error) {
+    consecutiveFailures += 1;
+    const message = (error as Error).message || String(error);
+
     logger.warn(`Groq call failed for ${label}, falling back to local-ai`, {
-      error: (error as Error).message,
+      error: message,
+      consecutiveFailures,
     });
+
+    if (
+      consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ||
+      /rate_limit|429|timed out/i.test(message)
+    ) {
+      openCircuit(message);
+    }
+
     return localCall();
   }
 }
 
 export const aiService = {
-  async generateAudienceInsight(book: Book, segment: string, platform: string, scrapedContext?: string) {
+  async generateAudienceInsight(
+    book: Book,
+    segment: string,
+    platform: string,
+    scrapedContext?: string
+  ) {
     return withFallback(
       'generateAudienceInsight',
       () => groqAiService.generateAudienceInsight(book, segment, platform, scrapedContext),

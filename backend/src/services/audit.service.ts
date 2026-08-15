@@ -3,6 +3,7 @@ import { auditRepository } from '../repositories/audit.repository';
 import { bookRepository } from '../repositories/book.repository';
 import { AppError } from '../utils/helpers';
 import { aiService } from './ai.service';
+import { inferTargetRegions, buildPersonas } from './audience-meta.service';
 import {
   scraperService,
   combineScrapedContext,
@@ -160,14 +161,18 @@ export const auditService = {
           rating: r.rating,
         }));
 
+        const targetRegions = inferTargetRegions(book, segment);
+        const personas = buildPersonas(book, segment, readersForPlatform(allReaders, platform), targetRegions);
+
         insights.push({
           segment,
           platform,
-          // Prisma requires non-null summary + finite confidence
           summary: safeSummary(result.summary, segment, platform),
           data: {
             ...(result.data && typeof result.data === 'object' ? result.data : {}),
             sampleReaders,
+            personas,
+            targetRegions,
             groundedInScrape: Boolean(scrapedContext),
             twitterSentiment:
               twitter && !twitter.error ? twitter.sentimentSummary : undefined,
