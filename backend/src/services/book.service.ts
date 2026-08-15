@@ -1,11 +1,14 @@
 import { bookRepository } from '../repositories/book.repository';
 import { AppError } from '../utils/helpers';
 import { paginate, buildPaginationMeta } from '../utils/formatter';
+import { enrichBookIdsFromUrls } from '../utils/book-url';
 import { CreateBookInput, UpdateBookInput, BookListFilters } from '../types/book.types';
 
 export const bookService = {
   async create(userId: string, input: CreateBookInput) {
-    return bookRepository.create(userId, input);
+    // Auto-fill ASIN / ISBN from public Amazon / Goodreads URLs when missing
+    const enriched = enrichBookIdsFromUrls(input);
+    return bookRepository.create(userId, enriched);
   },
 
   async getById(id: string, userId: string) {
@@ -22,7 +25,8 @@ export const bookService = {
 
   async update(id: string, userId: string, input: UpdateBookInput) {
     await this.getById(id, userId);
-    return bookRepository.update(id, input);
+    const enriched = enrichBookIdsFromUrls(input);
+    return bookRepository.update(id, enriched);
   },
 
   async remove(id: string, userId: string) {
