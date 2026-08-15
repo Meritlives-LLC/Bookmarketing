@@ -1,11 +1,70 @@
-import { CreativeStatus, CreativeType, Prisma } from '@prisma/client';
+import { CreativeStatus, CreativeType, Prisma, ReaderSegment } from '@prisma/client';
 import { creativeRepository } from '../repositories/creative.repository';
 import { bookRepository } from '../repositories/book.repository';
+import { auditRepository } from '../repositories/audit.repository';
 import { AppError } from '../utils/helpers';
 import { aiService } from './ai.service';
 import { logger } from '../utils/logger';
 import { GenerateCreativeInput } from '../types/creative.types';
 import { paginate, buildPaginationMeta } from '../utils/formatter';
+
+/**
+ * Pull real persona / sample-reader notes from the latest completed audit.
+ * Used to ground Ad Suite copy in scraped audience data (no generic archetypes).
+ */
+async function loadPersonaNotesForBook(
+  bookId: string,
+  segment?: ReaderSegment | null
+): Promise<string | undefined> {
+  try {
+    // Latest audits for this book (no user filter — generate already owns the book row)
+    const audits = await auditRepository.findRecentByBookId(bookId, 5);
+    const completed =
+      audits.find((a) => a.status === 'COMPLETED') ?? audits[0];
+    if (!completed?.audienceInsights?.length) return undefined;
+
+    const insights = completed.audienceInsights as Array<{
+      segment?: string;
+      summary?: string;
+      data?: Record<string, unknown> | null;
+    }>;
+
+    const preferred = segment
+      ? insights.filter((i) => i.segment === segment)
+      : insights;
+    const pool = preferred.length ? preferred : insights;
+
+    const lines: string[] = [];
+    for (const ins of pool.slice(0, 4)) {
+      if (ins.summary) lines.push(`Segment ${ins.segment}: ${ins.summary}`);
+      const data = (ins.data || {}) as Record<string, unknown>;
+      const readers = Array.isArray(data.sampleReaders) ? data.sampleReaders : [];
+      const personas = Array.isArray(data.personas) ? data.personas : [];
+      for (const r of readers.slice(0, 3) as Array<{ name?: string; quote?: string; source?: string }>) {
+        if (r.quote) {
+          lines.push(
+            `Reader (${r.source || 'scrape'}) ${r.name || ''}: "${String(r.quote).slice(0, 160)}"`
+          );
+        }
+      }
+      for (const p of personas.slice(0, 3) as Array<{
+        label?: string;
+        motivation?: string;
+        evidenceQuote?: string;
+      }>) {
+        const q = p.evidenceQuote || p.motivation;
+        if (q) lines.push(`Persona ${p.label || ''}: ${String(q).slice(0, 160)}`);
+      }
+    }
+    return lines.length ? lines.join('\n') : undefined;
+  } catch (err) {
+    logger.warn('Could not load persona notes for ad suite', {
+      bookId,
+      error: (err as Error).message,
+    });
+    return undefined;
+  }
+}
 
 export const creativeService = {
   async create(userId: string, input: GenerateCreativeInput) {
@@ -86,6 +145,17 @@ export const creativeService = {
           const post = await aiService.generateRedditPost(book);
           content = post;
           title = post.title;
+          break;
+        }
+        case CreativeType.AD_SUITE: {
+          const personaNotes = await loadPersonaNotesForBook(book.id, creative.segment);
+          const suite = await aiService.generateAdSuite(
+            book,
+            creative.segment ?? undefined,
+            personaNotes
+          );
+          content = suite as unknown as Record<string, unknown>;
+          title = `Ad suite — ${book.title}`;
           break;
         }
         default: {

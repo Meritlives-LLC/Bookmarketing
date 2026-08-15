@@ -198,6 +198,59 @@ export const groqAiService = {
     }>(prompt, { temperature: 0.4, maxTokens: 1000 });
   },
 
+    async generateAdSuite(
+    book: Book,
+    segment?: string,
+    personaNotes?: string
+  ) {
+    const segmentPart = segment
+      ? `Primary reader segment: "${segmentLabel(segment)}".`
+      : 'Primary reader segment: general readers of this genre.';
+    const personaPart = personaNotes?.trim()
+      ? `Use these real audience notes (do not invent named reviewers):\n${personaNotes.trim().slice(0, 1200)}`
+      : 'No persona scrape notes available — infer carefully from the book only.';
+
+    const prompt = buildUserPrompt({
+      task: `TASK: Act as a senior book-marketing creative director. Produce a complete ad creative suite for paid and organic channels. ${segmentPart}`,
+      book,
+      rules: [
+        personaPart,
+        'All copy must be specific to THIS book — no generic filler.',
+        'No spoilers of major plot twists. Do not invent awards, ranks, or review counts.',
+        'Headlines: under 12 words each. Bodies: 2–4 sentences. CTAs: short and action-oriented.',
+        'Visuals: descriptive enough for a designer or image model; include a midjourney-style imagePrompt.',
+        'Platform packs must be ready to paste into ads managers (platform-appropriate length).',
+        'Vary psychological angles across headlines (curiosity, benefit, social proof, urgency, emotion).',
+      ],
+      schema: `{
+  "headlines": [ { "text": string, "trigger": string, "platformFit": string } ],
+  "bodies": [ { "text": string, "emotion": string, "painPoint": string } ],
+  "ctas": [ { "text": string, "style": string } ],
+  "visuals": [ {
+    "type": "hero" | "carousel" | "video",
+    "title": string,
+    "description": string,
+    "colorPalette": string,
+    "mood": string,
+    "imagePrompt": string
+  } ],
+  "platforms": {
+    "facebook": [ { "primaryText": string, "headline": string, "description": string, "cta": string } ],
+    "instagram": [ { "caption": string, "headline": string, "cta": string, "hashtags": string[] } ],
+    "tiktok": [ { "hook": string, "script": string, "cta": string, "onScreenText": string } ],
+    "amazon": [ { "headline": string, "keywords": string[], "notes": string } ],
+    "email": [ { "subject": string, "preheader": string, "body": string, "cta": string } ]
+  },
+  "abTests": [ { "name": string, "control": string, "variantA": string, "variantB": string, "hypothesis": string } ]
+}`,
+    });
+
+    return askJSON</* same shape as schema */>(prompt, {
+      temperature: 0.85,
+      maxTokens: 4500,
+    });
+  },
+
   async generateAdCopy(book: Book, segment: string, platform: string) {
     const prompt = buildUserPrompt({
       task: `TASK: Write paid-social ad copy for the "${segmentLabel(segment)}" segment on ${platform.toLowerCase()}.`,

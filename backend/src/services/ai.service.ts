@@ -158,6 +158,14 @@ export const aiService = {
       () => localAiService.generateRedditPost(book)
     );
   },
+  
+  async generateAdSuite(book: Book, segment?: string, personaNotes?: string) {
+    return withFallback(
+      'generateAdSuite',
+      () => groqAiService.generateAdSuite(book, segment, personaNotes),
+      () => localAiService.generateAdSuite(book, segment, personaNotes)
+    );
+  },
 
   async generateCalendar(book: Book, days: number) {
     return withFallback(

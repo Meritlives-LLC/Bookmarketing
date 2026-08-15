@@ -350,6 +350,175 @@ export const localAiService = {
     };
   },
 
+  async generateAdSuite(book: Book, segment?: string, _personaNotes?: string) {
+    const seed = seedFrom(book.id, segment || 'suite', 'adsuite');
+    const { sentences, hookSentence, protagonist } = analyzeBook(book);
+    const genre = genreLabel(book.genre);
+    const blurb = excerptSentences(sentences, 180) || book.description || book.title;
+
+    const headlineBases = [
+      protagonist
+        ? `Meet ${protagonist} — your next ${genre} obsession`
+        : `The ${genre} read everyone is whispering about`,
+      `"${book.title}" hits different`,
+      `If you crave ${genre}, start here`,
+      `What if ${stripLeadingConjunction(hookSentence).split(' ').slice(0, 8).join(' ').toLowerCase()}…`,
+      `Readers can't put down "${book.title}"`,
+      `Your next late-night ${genre} binge`,
+      `One book. Zero chill.`,
+      `For fans who want more than the usual ${genre}`,
+      `Open "${book.title}" — and don't plan your evening`,
+      `The ${genre} story that stays with you`,
+    ];
+
+    const bodyBases = [
+      blurb,
+      `${blurb} Perfect for readers who want ${genre} with real emotional stakes.`,
+      `Inside "${book.title}": ${blurb}`,
+      protagonist
+        ? `Follow ${protagonist} through a ${genre} journey you won't forget. ${blurb}`
+        : `A ${genre} experience built for readers who feel everything. ${blurb}`,
+      `Stop scrolling. Start reading. ${blurb}`,
+      `When the blurb isn't enough — the pages will be. ${blurb}`,
+      `For your TBR if you love ${genre} that actually delivers.`,
+      `Clear your weekend. "${book.title}" does not share attention.`,
+    ];
+
+    const ctaBases = [
+      { text: 'Get the book', style: 'benefit' },
+      { text: 'Start reading', style: 'benefit' },
+      { text: 'Add to cart', style: 'urgency' },
+      { text: 'Read the sample', style: 'curiosity' },
+      { text: 'Claim your copy', style: 'urgency' },
+      { text: 'See why readers rave', style: 'social_proof' },
+      { text: 'Open the first chapter', style: 'curiosity' },
+      { text: 'Buy now', style: 'urgency' },
+      { text: 'Discover the story', style: 'emotion' },
+      { text: 'Join the readers', style: 'social_proof' },
+    ];
+
+    const triggers = ['curiosity', 'benefit', 'emotion', 'social proof', 'urgency', 'trope', 'identity', 'FOMO', 'transformation', 'specificity'];
+
+    return {
+      headlines: headlineBases.map((text, i) => ({
+        text,
+        trigger: triggers[i % triggers.length],
+        platformFit: i % 3 === 0 ? 'TikTok / Reels' : i % 3 === 1 ? 'Facebook / Instagram' : 'Amazon / Email',
+      })),
+      bodies: bodyBases.map((text, i) => ({
+        text,
+        emotion: ['wonder', 'urgency', 'warmth', 'tension', 'curiosity', 'belonging', 'excitement', 'resolve'][i % 8],
+        painPoint: i % 2 === 0 ? 'TBR fatigue / same-old genre' : 'Wanting a story that sticks',
+      })),
+      ctas: ctaBases,
+      visuals: [
+        {
+          type: 'hero',
+          title: 'Cover-forward lifestyle',
+          description: `Book cover of "${book.title}" held in soft natural light; shallow depth of field; reader hands only.`,
+          colorPalette: 'Warm neutrals + genre accent',
+          mood: 'Inviting, premium',
+          imagePrompt: `Professional book marketing photo, "${book.title}" cover clear and readable, soft window light, minimal background, high-end product photography --ar 4:5`,
+        },
+        {
+          type: 'hero',
+          title: 'Mood landscape',
+          description: `Atmospheric scene echoing the ${genre} tone of the book; no readable text except optional title treatment.`,
+          colorPalette: 'Genre-led cinematic grades',
+          mood: 'Immersive',
+          imagePrompt: `Cinematic ${genre} atmosphere inspired by "${book.title}", no spoilers, dramatic light, book marketing still --ar 1.91:1`,
+        },
+        {
+          type: 'carousel',
+          title: 'Promise → proof → CTA',
+          description: 'Slide 1 hook line, slide 2 blurb beat, slide 3 cover + CTA.',
+          colorPalette: 'Consistent brand colors across slides',
+          mood: 'Narrative',
+          imagePrompt: `Carousel panel set for book ad, clean typography space, "${book.title}", modern marketing layout --ar 1:1`,
+        },
+        {
+          type: 'video',
+          title: '15s hook reel',
+          description: '0–3s pattern interrupt text, 3–12s cover + one line of stakes, 12–15s CTA.',
+          colorPalette: 'High contrast for mobile',
+          mood: 'Fast, scroll-stopping',
+          imagePrompt: `Storyboard frame for vertical book promo video, bold on-screen text safe margins, "${book.title}" --ar 9:16`,
+        },
+        {
+          type: 'video',
+          title: 'Testimonial-style UGC',
+          description: 'Creator-style talking head holding the book; authentic, not studio-polished.',
+          colorPalette: 'Natural / phone-cam',
+          mood: 'Trust',
+          imagePrompt: `UGC style still, person holding paperback "${book.title}", candid lighting, social ad aesthetic --ar 9:16`,
+        },
+      ],
+      platforms: {
+        facebook: [
+          {
+            primaryText: bodyBases[0],
+            headline: headlineBases[0],
+            description: `Discover "${book.title}"`,
+            cta: 'Learn More',
+          },
+          {
+            primaryText: bodyBases[1],
+            headline: headlineBases[2],
+            description: genre,
+            cta: 'Shop Now',
+          },
+        ],
+        instagram: [
+          {
+            caption: `${headlineBases[1]}\n\n${bodyBases[2]}\n\n#${genre.replace(/\s+/g, '')} #BookRecommendation #TBR`,
+            headline: headlineBases[1],
+            cta: 'Link in bio',
+            hashtags: ['BookTok', genre.replace(/\s+/g, ''), 'AmReading', 'BookRecommendation'],
+          },
+        ],
+        tiktok: [
+          {
+            hook: headlineBases[4],
+            script: `HOOK: ${headlineBases[4]}\nBODY: ${blurb}\nCTA: Comment "TBR" if this is going on your list — "${book.title}"`,
+            cta: 'Read now',
+            onScreenText: book.title,
+          },
+        ],
+        amazon: [
+          {
+            headline: headlineBases[0].slice(0, 50),
+            keywords: [book.title, genre, `${genre} book`, 'must read'],
+            notes: 'Use with Sponsored Products; match bid to category competition.',
+          },
+        ],
+        email: [
+          {
+            subject: `Your next ${genre}: "${book.title}"`,
+            preheader: blurb.slice(0, 80),
+            body: `Hi,\n\n${bodyBases[0]}\n\nIf that sounds like your kind of read, "${book.title}" is ready for you.\n`,
+            cta: 'Get the book',
+          },
+        ],
+      },
+      abTests: [
+        {
+          name: 'Headline angle',
+          control: headlineBases[0],
+          variantA: headlineBases[3],
+          variantB: headlineBases[5],
+          hypothesis: 'Curiosity beats benefit for cold traffic in this genre.',
+        },
+        {
+          name: 'CTA style',
+          control: 'Get the book',
+          variantA: 'Start reading',
+          variantB: 'See the sample',
+          hypothesis: 'Lower-commitment CTAs lift click-through on cold audiences.',
+        },
+      ],
+    };
+  },
+
   async generateTikTokScript(book: Book) {
     const seed = seedFrom(book.id, 'tiktok');
     const { nounPhrases, protagonist, adjectives } = analyzeBook(book);
