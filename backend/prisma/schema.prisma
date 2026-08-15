@@ -85,6 +85,7 @@ enum CreativeType {
   DISCUSSION_GUIDE
   REDDIT_POST
   YOUTUBE_SCRIPT
+  AD_SUITE
 }
 
 enum CreativeStatus {
@@ -115,19 +116,6 @@ enum Platform {
   PODCAST
 }
 
-enum CreativeType {
-  IMAGE_AD
-  VIDEO_AD
-  TIKTOK_VIDEO
-  EMAIL_COPY
-  AMAZON_KEYWORDS
-  LANDING_PAGE
-  PODCAST_PITCH
-  DISCUSSION_GUIDE
-  REDDIT_POST
-  YOUTUBE_SCRIPT
-  AD_SUITE
-}
 
 // ─────────────────────────────────────────────────────────────
 // MODELS
