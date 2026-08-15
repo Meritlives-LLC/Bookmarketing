@@ -62,7 +62,7 @@ function bookBlob(book: Pick<Book, 'title' | 'description' | 'genre'>): string {
   return `${book.title}\n${book.description || ''}\n${book.genre}`;
 }
 
-function inferTargetRegions(
+export function inferTargetRegions(
   book: Pick<Book, 'title' | 'description' | 'genre'>,
   segment: string
 ): TargetRegion[] {
@@ -92,7 +92,7 @@ function inferTargetRegions(
   }));
 }
 
-function buildPersonas(
+export function buildPersonas(
   book: Pick<Book, 'title' | 'description'>,
   segment: string,
   readers: ScrapedReader[],
