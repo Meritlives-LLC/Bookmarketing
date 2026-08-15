@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import {
   ArrowLeft,
   RefreshCw,
@@ -22,12 +23,10 @@ import { SEGMENT_LABELS, PLATFORM_LABELS } from "@/lib/constants/platforms";
 import { formatDate, exportToCsv } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
-export default function AuditDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = use(params);
+export default function AuditDetailPage() {
+  const routeParams = useParams();
+  const id = String(routeParams.id ?? "");
+
   const [audit, setAudit] = useState<Audit | null>(null);
   const [loading, setLoading] = useState(true);
   const [regenLoading, setRegenLoading] = useState(false);
@@ -45,6 +44,7 @@ export default function AuditDetailPage({
   }
 
   useEffect(() => {
+    if (!id) return;
     load()
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -52,7 +52,7 @@ export default function AuditDetailPage({
 
   // Poll while processing — slower interval + backoff so we don't trip rate limits (429)
   useEffect(() => {
-    if (!audit) return;
+    if (!audit || !id) return;
     if (!["PENDING", "SCRAPING", "ANALYZING"].includes(audit.status)) return;
 
     let cancelled = false;
@@ -267,7 +267,8 @@ export default function AuditDetailPage({
                         keyword: k.keyword,
                         platform: PLATFORM_LABELS[k.platform] || k.platform,
                         searchVolume: k.searchVolume ?? "",
-                        suggestedBid: k.suggestedBid != null ? Number(k.suggestedBid).toFixed(2) : "",
+                        suggestedBid:
+                          k.suggestedBid != null ? Number(k.suggestedBid).toFixed(2) : "",
                         competition: k.competition ?? "",
                       }))
                     )
@@ -368,7 +369,10 @@ export default function AuditDetailPage({
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { variant: "success" | "destructive" | "secondary" | "warning"; label: string }> = {
+  const map: Record<
+    string,
+    { variant: "success" | "destructive" | "secondary" | "warning"; label: string }
+  > = {
     COMPLETED: { variant: "success", label: "Completed" },
     FAILED: { variant: "destructive", label: "Failed" },
     PENDING: { variant: "secondary", label: "Pending" },
