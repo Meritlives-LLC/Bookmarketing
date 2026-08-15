@@ -1,7 +1,7 @@
-import { CreativeStatus, CreativeType, Prisma, ReaderSegment } from '@prisma/client';
+import { AuditStatus, CreativeStatus, CreativeType, Prisma, ReaderSegment } from '@prisma/client';
 import { creativeRepository } from '../repositories/creative.repository';
 import { bookRepository } from '../repositories/book.repository';
-import { auditRepository } from '../repositories/audit.repository';
+import { prisma } from '../config/database';
 import { AppError } from '../utils/helpers';
 import { aiService } from './ai.service';
 import { logger } from '../utils/logger';
@@ -17,10 +17,16 @@ async function loadPersonaNotesForBook(
   segment?: ReaderSegment | null
 ): Promise<string | undefined> {
   try {
-    // Latest audits for this book (no user filter — generate already owns the book row)
-    const audits = await auditRepository.findRecentByBookId(bookId, 5);
+    const audits = await prisma.audit.findMany({
+      where: { bookId },
+      orderBy: { requestedAt: 'desc' },
+      take: 5,
+      include: { audienceInsights: true },
+    });
+
     const completed =
-      audits.find((a) => a.status === 'COMPLETED') ?? audits[0];
+      audits.find((a: { status: AuditStatus }) => a.status === AuditStatus.COMPLETED) ??
+      audits[0];
     if (!completed?.audienceInsights?.length) return undefined;
 
     const insights = completed.audienceInsights as Array<{

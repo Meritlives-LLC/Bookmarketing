@@ -198,7 +198,33 @@ export const groqAiService = {
     }>(prompt, { temperature: 0.4, maxTokens: 1000 });
   },
 
-    async generateAdSuite(
+  async generateAdCopy(book: Book, segment: string, platform: string) {
+    const prompt = buildUserPrompt({
+      task: `TASK: Write paid-social ad copy for the "${segmentLabel(segment)}" segment on ${platform.toLowerCase()}.`,
+      book,
+      rules: [
+        'headline: under 12 words, concrete, not clickbait.',
+        'body: 2–3 sentences, platform-appropriate length, no spoilers.',
+        'callToAction: 2–4 words.',
+        'Do not invent awards, bestseller ranks, or review counts.',
+      ],
+      schema: `{
+  "headline": string,
+  "body": string,
+  "callToAction": string
+}`,
+    });
+    return askJSON<{ headline: string; body: string; callToAction: string }>(prompt, {
+      temperature: 0.85,
+      maxTokens: 500,
+    });
+  },
+
+  /**
+   * Full ad creative suite: headlines, bodies, CTAs, visuals, platform packs.
+   * Optional personaNotes from audit (real scraped personas only).
+   */
+  async generateAdSuite(
     book: Book,
     segment?: string,
     personaNotes?: string
@@ -223,9 +249,9 @@ export const groqAiService = {
         'Vary psychological angles across headlines (curiosity, benefit, social proof, urgency, emotion).',
       ],
       schema: `{
-  "headlines": [ { "text": string, "trigger": string, "platformFit": string } ],
-  "bodies": [ { "text": string, "emotion": string, "painPoint": string } ],
-  "ctas": [ { "text": string, "style": string } ],
+  "headlines": [ { "text": string, "trigger": string, "platformFit": string } ],  // exactly 10
+  "bodies": [ { "text": string, "emotion": string, "painPoint": string } ],  // exactly 8
+  "ctas": [ { "text": string, "style": string } ],  // exactly 10
   "visuals": [ {
     "type": "hero" | "carousel" | "video",
     "title": string,
@@ -233,7 +259,7 @@ export const groqAiService = {
     "colorPalette": string,
     "mood": string,
     "imagePrompt": string
-  } ],
+  } ],  // 5–8 items
   "platforms": {
     "facebook": [ { "primaryText": string, "headline": string, "description": string, "cta": string } ],
     "instagram": [ { "caption": string, "headline": string, "cta": string, "hashtags": string[] } ],
@@ -245,31 +271,31 @@ export const groqAiService = {
 }`,
     });
 
-    return askJSON</* same shape as schema */>(prompt, {
+    type AdSuiteResult = {
+      headlines: Array<{ text: string; trigger?: string; platformFit?: string }>;
+      bodies: Array<{ text: string; emotion?: string; painPoint?: string }>;
+      ctas: Array<{ text: string; style?: string }>;
+      visuals: Array<{
+        type?: string;
+        title?: string;
+        description?: string;
+        colorPalette?: string;
+        mood?: string;
+        imagePrompt?: string;
+      }>;
+      platforms?: {
+        facebook?: Array<Record<string, unknown>>;
+        instagram?: Array<Record<string, unknown>>;
+        tiktok?: Array<Record<string, unknown>>;
+        amazon?: Array<Record<string, unknown>>;
+        email?: Array<Record<string, unknown>>;
+      };
+      abTests?: Array<Record<string, unknown>>;
+    };
+
+    return askJSON<AdSuiteResult>(prompt, {
       temperature: 0.85,
       maxTokens: 4500,
-    });
-  },
-
-  async generateAdCopy(book: Book, segment: string, platform: string) {
-    const prompt = buildUserPrompt({
-      task: `TASK: Write paid-social ad copy for the "${segmentLabel(segment)}" segment on ${platform.toLowerCase()}.`,
-      book,
-      rules: [
-        'headline: under 12 words, concrete, not clickbait.',
-        'body: 2–3 sentences, platform-appropriate length, no spoilers.',
-        'callToAction: 2–4 words.',
-        'Do not invent awards, bestseller ranks, or review counts.',
-      ],
-      schema: `{
-  "headline": string,
-  "body": string,
-  "callToAction": string
-}`,
-    });
-    return askJSON<{ headline: string; body: string; callToAction: string }>(prompt, {
-      temperature: 0.85,
-      maxTokens: 500,
     });
   },
 
@@ -369,6 +395,7 @@ export const groqAiService = {
         'Transparent authorship, value-first, no hard sell, no link in the body.',
         'title: under 15 words, no emoji/clickbait.',
         'body: 3–4 short paragraphs ending in a real discussion question.',
+        ,
       ],
       schema: `{
   "suggestedSubreddit": string,
