@@ -259,9 +259,9 @@ export default function AnalyticsPage() {
           </CardHeader>
           <CardContent className="space-y-5">
             <p className="text-sm text-muted-foreground">
-              Ran {new Date(optimizationResult.ranAt).toLocaleString()} — based on the analytics you've logged for
-              this book. Platforms need at least $20 in recorded spend before they're judged, and "underperforming"
-              means ROAS below 1.0x (spend isn't earning itself back).
+              Ran {new Date(optimizationResult.ranAt).toLocaleString()} — based on the analytics you&apos;ve logged for
+              this book. Platforms need at least $20 in recorded spend before they&apos;re judged, and &quot;underperforming&quot;
+              means ROAS below 1.0x (spend isn&apos;t earning itself back).
             </p>
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -296,7 +296,7 @@ export default function AnalyticsPage() {
                 <ul className="space-y-1 text-sm text-muted-foreground">
                   {optimizationResult.pausedCreatives.map((c) => (
                     <li key={c.id}>
-                      Creative "{c.title || "Untitled"}" on {PLATFORM_LABELS[c.platform] || c.platform} — archived
+                      Creative &quot;{c.title || "Untitled"}&quot; on {PLATFORM_LABELS[c.platform] || c.platform} — archived
                     </li>
                   ))}
                   {optimizationResult.canceledEvents.map((e) => (
@@ -331,7 +331,7 @@ export default function AnalyticsPage() {
                   ))}
                 </ul>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  These are recommendations only — no ad account is connected, so budgets aren't moved automatically.
+                  These are recommendations only — no ad account is connected, so budgets aren&apos;t moved automatically.
                 </p>
               </div>
             )}
