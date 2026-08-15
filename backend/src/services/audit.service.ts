@@ -27,17 +27,24 @@ const SEGMENT_PLATFORM_MAP: Array<{ segment: ReaderSegment; platform: Platform }
   { segment: ReaderSegment.LIBRARY, platform: Platform.GOODREADS },
 ];
 
+/** Pause between Groq calls to stay under free-tier TPM (~8k/min). */
+const GROQ_GAP_MS = 1500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function readersForPlatform(all: ScrapedReader[], platform: Platform): ScrapedReader[] {
   const map: Partial<Record<Platform, ScrapedReader['source'][]>> = {
     [Platform.GOODREADS]: ['goodreads'],
     [Platform.AMAZON]: ['amazon'],
-    [Platform.REDDIT]: ['reddit'],
-    [Platform.YOUTUBE]: ['reddit', 'goodreads'],
-    [Platform.TIKTOK]: ['reddit', 'amazon'],
-    [Platform.FACEBOOK]: ['reddit', 'goodreads'],
+    [Platform.REDDIT]: ['reddit', 'twitter'],
+    [Platform.YOUTUBE]: ['youtube'],
+    [Platform.TIKTOK]: ['twitter', 'reddit', 'youtube'],
+    [Platform.FACEBOOK]: ['reddit', 'goodreads', 'twitter'],
     [Platform.EMAIL]: ['goodreads', 'amazon'],
-    [Platform.PODCAST]: ['reddit', 'goodreads'],
-    [Platform.INSTAGRAM]: ['amazon', 'reddit'],
+    [Platform.PODCAST]: ['youtube', 'reddit', 'twitter'],
+    [Platform.INSTAGRAM]: ['twitter', 'youtube'],
   };
   const allowed = map[platform];
   const filtered = allowed ? all.filter((r) => allowed.includes(r.source)) : all;
@@ -78,62 +85,95 @@ export const auditService = {
       const book = audit.book;
       const searchQuery = [book.title, book.genre.replace(/_/g, ' ')].filter(Boolean).join(' ');
 
-      const [goodreadsResult, amazonResult, redditResult] = await Promise.allSettled([
-        book.goodreadsUrl
-          ? scraperService.scrapeGoodreads(book.goodreadsUrl)
-          : Promise.resolve(null),
-        book.amazonUrl ? scraperService.scrapeAmazon(book.amazonUrl) : Promise.resolve(null),
-        scraperService.scrapeRedditMentions(searchQuery),
-      ]);
+      const [goodreadsResult, amazonResult, redditResult, youtubeResult, twitterResult] =
+        await Promise.allSettled([
+          book.goodreadsUrl
+            ? scraperService.scrapeGoodreads(book.goodreadsUrl)
+            : Promise.resolve(null),
+          book.amazonUrl ? scraperService.scrapeAmazon(book.amazonUrl) : Promise.resolve(null),
+          scraperService.scrapeRedditMentions(searchQuery),
+          scraperService.scrapeYouTubeSearch(`${book.title} book review`),
+          scraperService.scrapeTwitterSentiment(book.title),
+        ]);
 
       const settled = [
         goodreadsResult.status === 'fulfilled' ? goodreadsResult.value : null,
         amazonResult.status === 'fulfilled' ? amazonResult.value : null,
         redditResult.status === 'fulfilled' ? redditResult.value : null,
+        youtubeResult.status === 'fulfilled' ? youtubeResult.value : null,
+        twitterResult.status === 'fulfilled' ? twitterResult.value : null,
       ];
 
       const scrapedContext = combineScrapedContext(settled);
       const allReaders = collectReaders(settled);
+      const twitter = settled[4];
+
+      logger.info('Audit scrape complete', {
+        auditId,
+        sourcesOk: settled.filter((r) => r && !r.error).length,
+        fromCache: settled.filter((r) => r && r.fromCache).length,
+        readerCount: allReaders.length,
+      });
 
       await auditRepository.updateStatus(auditId, AuditStatus.ANALYZING);
 
-      const insights = await Promise.all(
-        SEGMENT_PLATFORM_MAP.map(async ({ segment, platform }) => {
-          const result = await aiService.generateAudienceInsight(
-            book,
-            segment,
-            platform,
-            scrapedContext
-          );
-          const sampleReaders = readersForPlatform(allReaders, platform).map((r) => ({
-            name: r.name,
-            source: r.source,
-            quote: r.quote,
-            profileUrl: r.profileUrl,
-            rating: r.rating,
-          }));
+      // Sequential Groq calls — parallel Promise.all blows free-tier TPM (~8k/min)
+      const insights: Array<{
+        segment: ReaderSegment;
+        platform: Platform;
+        summary: string;
+        data: Record<string, unknown>;
+        confidence: number;
+      }> = [];
 
-          return {
-            segment,
-            platform,
-            summary: result.summary,
-            data: {
-              ...result.data,
-              sampleReaders,
-              groundedInScrape: Boolean(scrapedContext),
-            },
-            confidence: result.confidence,
-          };
-        })
-      );
+      for (let i = 0; i < SEGMENT_PLATFORM_MAP.length; i++) {
+        const { segment, platform } = SEGMENT_PLATFORM_MAP[i];
+
+        const result = await aiService.generateAudienceInsight(
+          book,
+          segment,
+          platform,
+          scrapedContext
+        );
+
+        const sampleReaders = readersForPlatform(allReaders, platform).map((r) => ({
+          name: r.name,
+          source: r.source,
+          quote: r.quote,
+          profileUrl: r.profileUrl,
+          rating: r.rating,
+        }));
+
+        insights.push({
+          segment,
+          platform,
+          summary: result.summary,
+          data: {
+            ...result.data,
+            sampleReaders,
+            groundedInScrape: Boolean(scrapedContext),
+            twitterSentiment:
+              twitter && !twitter.error ? twitter.sentimentSummary : undefined,
+          },
+          confidence: result.confidence,
+        });
+
+        // Gap between calls (skip after last)
+        if (i < SEGMENT_PLATFORM_MAP.length - 1) {
+          await sleep(GROQ_GAP_MS);
+        }
+      }
+
       await auditRepository.addAudienceInsights(auditId, insights);
 
+      await sleep(GROQ_GAP_MS);
       const keywordResult = await aiService.generateKeywordSuggestions(book, scrapedContext);
       await auditRepository.addKeywordSuggestions(
         auditId,
         keywordResult.keywords.map((k) => ({ ...k, platform: Platform.AMAZON }))
       );
 
+      await sleep(GROQ_GAP_MS);
       const competitorResult = await aiService.generateCompetitorAnalysis(book, scrapedContext);
       await auditRepository.addCompetitorAnalyses(auditId, competitorResult.competitors);
 
