@@ -12,7 +12,7 @@ export function useCreateBook() {
     setLoading(true);
     setError(null);
     try {
-      return await api.post<Book>("/books", body);
+      return await api.post<Book & { auditId?: string | null }>("/books", body);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Failed to create book";
       setError(msg);

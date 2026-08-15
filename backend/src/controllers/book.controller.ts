@@ -2,12 +2,37 @@ import { Request, Response, NextFunction } from 'express';
 import { bookService } from '../services/book.service';
 import { auditService } from '../services/audit.service';
 import { enqueueAuditJob } from '../queues/audit.queue';
+import { logger } from '../utils/logger';
 
 export const bookController = {
   async create(req: Request, res: Response, next: NextFunction) {
     try {
       const book = await bookService.create(req.user!.id, req.body);
-      res.status(201).json({ success: true, data: book });
+
+      // Auto-start audience audit in the background — do not fail book creation
+      let auditId: string | null = null;
+      try {
+        const audit = await auditService.create(book.id, req.user!.id);
+        auditId = audit.id;
+        await enqueueAuditJob({ auditId: audit.id, bookId: book.id });
+        logger.info('Auto-audit enqueued on book create', {
+          bookId: book.id,
+          auditId: audit.id,
+        });
+      } catch (err) {
+        logger.warn('Auto-audit failed to enqueue (book still created)', {
+          bookId: book.id,
+          error: (err as Error).message,
+        });
+      }
+
+      res.status(201).json({
+        success: true,
+        data: {
+          ...book,
+          auditId,
+        },
+      });
     } catch (error) {
       next(error);
     }

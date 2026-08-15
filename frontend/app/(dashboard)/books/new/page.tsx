@@ -73,8 +73,13 @@ export default function NewBookPage() {
         asin: form.asin || fromAmazon.asin || undefined,
         isbn: form.isbn || fromAmazon.isbn || fromGoodreads.isbn || undefined,
       };
-      const book = await api.post<{ id: string }>("/books", body);
-      router.push(`/books/${book.id}`);
+      const book = await api.post<{ id: string; auditId?: string | null }>("/books", body);
+      // Auto-audit starts on create — land on the live audit page when available
+      if (book.auditId) {
+        router.push(`/audit/${book.auditId}`);
+      } else {
+        router.push(`/books/${book.id}`);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create book");
     } finally {
