@@ -6,11 +6,11 @@ import { ThemeToggle } from "@/components/shared/ThemeToggle";
 
 export function Topbar() {
   return (
-    <div className="hidden h-16 items-center gap-4 border-b bg-background px-6 md:flex">
-      <div className="flex-1">
+    <div className="hidden h-16 shrink-0 items-center gap-3 border-b bg-background px-4 lg:gap-4 lg:px-6 md:flex">
+      <div className="min-w-0 flex-1">
         <CommandPalette />
       </div>
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         <ThemeToggle />
         <NotificationBell />
       </div>

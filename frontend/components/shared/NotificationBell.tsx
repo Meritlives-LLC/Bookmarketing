@@ -6,7 +6,7 @@ import { api } from "@/lib/api/client";
 import type { Notification } from "@/types";
 import { formatRelative, cn } from "@/lib/utils";
 
-const POLL_INTERVAL_MS = 30_000;
+const POLL_INTERVAL_MS = 60_000;
 
 export function NotificationBell() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -18,15 +18,18 @@ export function NotificationBell() {
     return api
       .get<Notification[]>("/user/notifications")
       .then(setNotifications)
-      .catch(() => {
-        // Notifications are a nice-to-have; fail silently so a down
-        // endpoint never blocks the rest of the dashboard.
-      });
+      .catch(() => {});
   }
 
   useEffect(() => {
     load().finally(() => setLoading(false));
-    const t = setInterval(load, POLL_INTERVAL_MS);
+
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        load();
+      }
+    }, POLL_INTERVAL_MS);
+
     return () => clearInterval(t);
   }, []);
 
@@ -49,7 +52,6 @@ export function NotificationBell() {
     try {
       await api.put(`/user/notifications/${id}`);
     } catch {
-      // Revert on failure
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, read: false } : n))
       );
@@ -59,7 +61,9 @@ export function NotificationBell() {
   async function markAllRead() {
     const unread = notifications.filter((n) => !n.read);
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-    await Promise.all(unread.map((n) => api.put(`/user/notifications/${n.id}`).catch(() => {})));
+    await Promise.all(
+      unread.map((n) => api.put(`/user/notifications/${n.id}`).catch(() => {}))
+    );
   }
 
   return (
@@ -78,7 +82,12 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-80 rounded-xl border bg-popover shadow-lg animate-fade-in">
+        <div
+          className={cn(
+            "z-50 mt-2 rounded-xl border bg-popover shadow-lg animate-fade-in",
+            "fixed inset-x-3 top-14 max-h-[min(24rem,70vh)] sm:absolute sm:inset-x-auto sm:right-0 sm:top-auto sm:mt-2 sm:w-80 sm:max-h-96"
+          )}
+        >
           <div className="flex items-center justify-between border-b px-4 py-3">
             <p className="text-sm font-semibold">Notifications</p>
             {unreadCount > 0 && (
@@ -90,7 +99,7 @@ export function NotificationBell() {
               </button>
             )}
           </div>
-          <div className="max-h-96 overflow-y-auto">
+          <div className="max-h-[min(20rem,60vh)] overflow-y-auto sm:max-h-96">
             {loading && (
               <div className="flex justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -111,7 +120,9 @@ export function NotificationBell() {
                 )}
               >
                 <div className="flex items-center gap-2">
-                  {!n.read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
+                  {!n.read && (
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                  )}
                   <p className="text-sm font-medium">{n.title}</p>
                 </div>
                 <p className="text-xs text-muted-foreground">{n.body}</p>
