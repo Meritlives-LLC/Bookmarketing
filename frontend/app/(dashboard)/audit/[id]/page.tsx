@@ -13,12 +13,27 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
+  MapPin,
+  Quote,
+  UserCircle2,
+  ExternalLink,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { api, ApiError } from "@/lib/api/client";
-import type { Audit, AudienceInsight, KeywordSuggestion, CompetitorAnalysis } from "@/types";
+import type {
+  Audit,
+  AudienceInsight,
+  AudienceInsightData,
+  KeywordSuggestion,
+  CompetitorAnalysis,
+  SampleReader,
+  AudiencePersona,
+  TargetRegion,
+} from "@/types";
 import { SEGMENT_LABELS, PLATFORM_LABELS } from "@/lib/constants/platforms";
 import { formatDate, exportToCsv } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -239,7 +254,7 @@ export default function AuditDetailPage() {
           </div>
 
           {tab === "audience" && (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-2">
               {insights.length === 0 && (
                 <p className="col-span-2 text-sm text-muted-foreground">
                   No audience insights yet.
@@ -407,7 +422,19 @@ function StatCard({
   );
 }
 
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
 function AudienceCard({ insight }: { insight: AudienceInsight }) {
+  const [expanded, setExpanded] = useState(false);
+  const data = (insight.data || {}) as AudienceInsightData;
+  const sampleReaders = asArray<SampleReader>(data.sampleReaders);
+  const personas = asArray<AudiencePersona>(data.personas);
+  const targetRegions = asArray<TargetRegion>(data.targetRegions);
+  const grounded = Boolean(data.groundedInScrape);
+  const hasIndividuals = sampleReaders.length > 0 || personas.length > 0;
+
   return (
     <Card className="overflow-hidden">
       <CardHeader className="pb-3">
@@ -418,6 +445,11 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
             </CardTitle>
             <p className="mt-1 text-xs text-muted-foreground">
               {PLATFORM_LABELS[insight.platform] || insight.platform}
+              {grounded && (
+                <span className="ml-2 inline-flex items-center gap-1 text-emerald-600">
+                  · grounded in scrape
+                </span>
+              )}
             </p>
           </div>
           <Badge variant="outline">
@@ -425,10 +457,148 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
           </Badge>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
         <p className="text-sm leading-relaxed text-muted-foreground">
           {insight.summary}
         </p>
+
+        {targetRegions.length > 0 && (
+          <div>
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <MapPin className="h-3.5 w-3.5" />
+              Target regions
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {targetRegions.map((r, i) => (
+                <Badge
+                  key={`${r.region}-${i}`}
+                  variant={r.priority === "primary" ? "default" : "outline"}
+                  className="text-xs font-normal"
+                  title={r.reason}
+                >
+                  {r.region}
+                  {r.priority === "primary" ? " · primary" : ""}
+                </Badge>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {hasIndividuals && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="flex w-full items-center justify-between rounded-md border bg-muted/40 px-3 py-2 text-left text-sm font-medium transition-colors hover:bg-muted/70"
+          >
+            <span className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-primary" />
+              Individuals
+              <span className="text-xs font-normal text-muted-foreground">
+                {[
+                  sampleReaders.length > 0 && `${sampleReaders.length} readers`,
+                  personas.length > 0 && `${personas.length} personas`,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </span>
+            {expanded ? (
+              <ChevronUp className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            )}
+          </button>
+        )}
+
+        {expanded && (
+          <div className="space-y-4 border-t pt-3">
+            {sampleReaders.length > 0 && (
+              <div>
+                <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Quote className="h-3.5 w-3.5" />
+                  Sample readers (scraped)
+                </p>
+                <ul className="space-y-3">
+                  {sampleReaders.map((r, i) => (
+                    <li
+                      key={`${r.name}-${i}`}
+                      className="rounded-lg border bg-background p-3"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">{r.name}</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            {r.source}
+                            {r.rating ? ` · ${r.rating}` : ""}
+                          </p>
+                        </div>
+                        {r.profileUrl && (
+                          <a
+                            href={r.profileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="shrink-0 text-muted-foreground hover:text-primary"
+                            title="Open profile"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                      </div>
+                      {r.quote && (
+                        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                          “{r.quote}”
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {personas.length > 0 && (
+              <div>
+                <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <UserCircle2 className="h-3.5 w-3.5" />
+                  Personas
+                </p>
+                <ul className="space-y-3">
+                  {personas.map((p, i) => (
+                    <li
+                      key={`${p.label}-${i}`}
+                      className="rounded-lg border bg-background p-3"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-medium">{p.label}</p>
+                        {p.region && (
+                          <Badge variant="outline" className="text-xs font-normal">
+                            <MapPin className="mr-1 h-3 w-3" />
+                            {p.region}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{p.role}</p>
+                      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                        {p.motivation}
+                      </p>
+                      {p.evidenceQuote && (
+                        <p className="mt-2 border-l-2 border-primary/30 pl-2 text-xs italic text-muted-foreground">
+                          {p.evidenceSource ? `[${p.evidenceSource}] ` : ""}
+                          “{p.evidenceQuote}”
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {sampleReaders.length === 0 && personas.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No individual readers or personas for this segment yet.
+              </p>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

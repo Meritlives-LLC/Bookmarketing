@@ -133,12 +133,51 @@ export interface Audit {
   competitorAnalyses?: CompetitorAnalysis[];
 }
 
+/** Real scraped reader from Goodreads / Amazon / Reddit / etc. */
+export interface SampleReader {
+  name: string;
+  source: string;
+  quote: string;
+  profileUrl?: string;
+  rating?: string;
+}
+
+/** Marketing persona (from scrape + segment archetypes) */
+export interface AudiencePersona {
+  label: string;
+  role: string;
+  motivation: string;
+  region?: string;
+  evidenceSource?: string;
+  evidenceQuote?: string;
+}
+
+export interface TargetRegion {
+  region: string;
+  priority: "primary" | "secondary" | "exploratory";
+  reason: string;
+}
+
+export interface AudienceInsightData {
+  sampleReaders?: SampleReader[];
+  personas?: AudiencePersona[];
+  targetRegions?: TargetRegion[];
+  groundedInScrape?: boolean;
+  twitterSentiment?: {
+    positive?: number;
+    neutral?: number;
+    negative?: number;
+    average?: number;
+  };
+  [key: string]: unknown;
+}
+
 export interface AudienceInsight {
   id: string;
   segment: ReaderSegment;
   platform: Platform;
   summary: string;
-  data: Record<string, unknown>;
+  data: AudienceInsightData;
   confidence: number;
 }
 
