@@ -10,6 +10,7 @@ import { api, apiDownload, ApiError } from "@/lib/api/client";
 import type { Creative } from "@/types";
 import { SEGMENT_LABELS, PLATFORM_LABELS } from "@/lib/constants/platforms";
 import { formatDate } from "@/lib/utils";
+import { formatCreativeContent } from "@/lib/format-creative";
 
 export default function CreativeDetailPage({
   params,
@@ -33,19 +34,28 @@ export default function CreativeDetailPage({
 
   function copyAll() {
     if (!creative) return;
-    const text =
-      typeof creative.content === "object"
-        ? JSON.stringify(creative.content, null, 2)
-        : String(creative.content);
+    const text = formatCreativeContent(creative.content);
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
   async function download() {
+    if (!creative) return;
     setDownloading(true);
     try {
-      await apiDownload(`/creatives/${id}/download`, `creative-${id}.json`);
+      const text = formatCreativeContent(creative.content);
+      if (text) {
+        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `creative-${id}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        await apiDownload(`/creatives/${id}/download`, `creative-${id}.json`);
+      }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Download failed");
     } finally {
@@ -78,6 +88,8 @@ export default function CreativeDetailPage({
       </div>
     );
   }
+
+  const proText = formatCreativeContent(creative.content);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 animate-fade-in">
@@ -123,8 +135,18 @@ export default function CreativeDetailPage({
                 </>
               )}
             </Button>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={download} disabled={downloading}>
-              {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={download}
+              disabled={downloading}
+            >
+              {downloading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
               Download
             </Button>
             <Button variant="ghost" size="icon" onClick={remove}>
@@ -134,16 +156,20 @@ export default function CreativeDetailPage({
         </div>
       </div>
 
+      {error && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Content</CardTitle>
         </CardHeader>
         <CardContent>
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-4 text-sm leading-relaxed">
-            {typeof creative.content === "object"
-              ? JSON.stringify(creative.content, null, 2)
-              : String(creative.content)}
-          </pre>
+          <div className="overflow-x-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-5 text-sm leading-relaxed text-foreground">
+            {proText || "No content yet."}
+          </div>
         </CardContent>
       </Card>
 

@@ -22,9 +22,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { api, ApiError } from "@/lib/api/client";
-import type { Book, Creative, CreativeType, ReaderSegment, Platform } from "@/types";
+import type { Book, Creative, CreativeType, ReaderSegment } from "@/types";
 import { SEGMENT_LABELS, PLATFORM_LABELS } from "@/lib/constants/platforms";
 import { formatRelative, cn } from "@/lib/utils";
+import {
+  formatCreativeContent,
+  formatCreativePreview,
+} from "@/lib/format-creative";
 
 const CREATIVE_TYPES: {
   type: CreativeType;
@@ -52,16 +56,20 @@ function CreativesContent() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
-  const [selectedType, setSelectedType] = useState<CreativeType | "">("");
+  const [selectedTypes, setSelectedTypes] = useState<CreativeType[]>([]);
   const [selectedSegment, setSelectedSegment] = useState<ReaderSegment | "">("");
   const [showGenerator, setShowGenerator] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [genProgress, setGenProgress] = useState<{ done: number; total: number } | null>(null);
 
   useEffect(() => {
-    api.get<Book[]>("/books").then((b) => {
-      setBooks(b);
-      if (!bookId && b.length > 0) setBookId(b[0].id);
-    }).catch(() => {});
+    api
+      .get<Book[]>("/books")
+      .then((b) => {
+        setBooks(b);
+        if (!bookId && b.length > 0) setBookId(b[0].id);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -78,32 +86,58 @@ function CreativesContent() {
       .finally(() => setLoading(false));
   }, [bookId]);
 
+  function toggleType(type: CreativeType) {
+    setSelectedTypes((prev) =>
+      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+    );
+  }
+
   async function generate() {
-    if (!bookId || !selectedType) return;
+    if (!bookId || selectedTypes.length === 0) return;
     setGenerating(true);
     setError("");
-    try {
-      const creative = await api.post<Creative>("/creatives/generate", {
-        bookId,
-        type: selectedType,
-        segment: selectedSegment || undefined,
-      });
-      setCreatives((prev) => [creative, ...prev]);
-      setShowGenerator(false);
-      setSelectedType("");
-      setSelectedSegment("");
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Generation failed");
-    } finally {
-      setGenerating(false);
+    setGenProgress({ done: 0, total: selectedTypes.length });
+
+    const created: Creative[] = [];
+    const failures: string[] = [];
+
+    for (let i = 0; i < selectedTypes.length; i++) {
+      const type = selectedTypes[i];
+      try {
+        const creative = await api.post<Creative>("/creatives/generate", {
+          bookId,
+          type,
+          segment: selectedSegment || undefined,
+        });
+        created.push(creative);
+      } catch (e) {
+        const label = CREATIVE_TYPES.find((t) => t.type === type)?.label || type;
+        failures.push(
+          `${label}: ${e instanceof ApiError ? e.message : "failed"}`
+        );
+      }
+      setGenProgress({ done: i + 1, total: selectedTypes.length });
     }
+
+    if (created.length > 0) {
+      setCreatives((prev) => [...created, ...prev]);
+      setShowGenerator(false);
+      setSelectedTypes([]);
+      setSelectedSegment("");
+    }
+    if (failures.length > 0) {
+      setError(
+        created.length === 0
+          ? failures.join(" · ")
+          : `Generated ${created.length}; some failed — ${failures.join(" · ")}`
+      );
+    }
+    setGenerating(false);
+    setGenProgress(null);
   }
 
   function copyContent(c: Creative) {
-    const text =
-      typeof c.content === "object"
-        ? JSON.stringify(c.content, null, 2)
-        : String(c.content);
+    const text = formatCreativeContent(c.content);
     navigator.clipboard.writeText(text);
     setCopiedId(c.id);
     setTimeout(() => setCopiedId(null), 2000);
@@ -160,40 +194,85 @@ function CreativesContent() {
         <Card className="border-primary/30 shadow-glow">
           <CardHeader>
             <CardTitle className="text-base">Generate new creative</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Select one or more types. Each type is generated as its own creative.
+            </p>
           </CardHeader>
           <CardContent className="space-y-5">
             <div>
-              <p className="mb-3 text-sm font-medium">Type</p>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                {CREATIVE_TYPES.map((t) => (
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <p className="text-sm font-medium">Types</p>
+                <div className="flex gap-2 text-xs">
                   <button
-                    key={t.type}
                     type="button"
-                    onClick={() => setSelectedType(t.type)}
-                    className={cn(
-                      "flex items-start gap-3 rounded-lg border p-3 text-left transition",
-                      selectedType === t.type
-                        ? "border-primary bg-primary/5 ring-1 ring-primary"
-                        : "hover:bg-muted/50"
-                    )}
+                    className="text-primary hover:underline"
+                    onClick={() =>
+                      setSelectedTypes(CREATIVE_TYPES.map((t) => t.type))
+                    }
                   >
-                    <t.icon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                    <div>
-                      <p className="text-sm font-medium">{t.label}</p>
-                      <p className="text-xs text-muted-foreground">{t.description}</p>
-                    </div>
+                    Select all
                   </button>
-                ))}
+                  <span className="text-muted-foreground">·</span>
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:underline"
+                    onClick={() => setSelectedTypes([])}
+                  >
+                    Clear
+                  </button>
+                </div>
               </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {CREATIVE_TYPES.map((t) => {
+                  const selected = selectedTypes.includes(t.type);
+                  return (
+                    <button
+                      key={t.type}
+                      type="button"
+                      onClick={() => toggleType(t.type)}
+                      className={cn(
+                        "flex items-start gap-3 rounded-lg border p-3 text-left transition",
+                        selected
+                          ? "border-primary bg-primary/5 ring-1 ring-primary"
+                          : "hover:bg-muted/50"
+                      )}
+                    >
+                      <t.icon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium">{t.label}</p>
+                        <p className="text-xs text-muted-foreground">{t.description}</p>
+                      </div>
+                      <span
+                        className={cn(
+                          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
+                          selected
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-muted-foreground/40"
+                        )}
+                      >
+                        {selected ? "✓" : ""}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedTypes.length > 0 && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {selectedTypes.length} type{selectedTypes.length === 1 ? "" : "s"} selected
+                </p>
+              )}
             </div>
             <div>
               <p className="mb-2 text-sm font-medium">
-                Reader segment <span className="font-normal text-muted-foreground">(optional)</span>
+                Reader segment{" "}
+                <span className="font-normal text-muted-foreground">(optional)</span>
               </p>
               <select
                 className="h-10 w-full max-w-md rounded-lg border border-input bg-background px-3 text-sm"
                 value={selectedSegment}
-                onChange={(e) => setSelectedSegment(e.target.value as ReaderSegment | "")}
+                onChange={(e) =>
+                  setSelectedSegment(e.target.value as ReaderSegment | "")
+                }
               >
                 <option value="">All / auto</option>
                 {segments.map(([value, label]) => (
@@ -203,19 +282,36 @@ function CreativesContent() {
                 ))}
               </select>
             </div>
-            <div className="flex gap-2">
-              <Button onClick={generate} disabled={!selectedType || generating} className="gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={generate}
+                disabled={selectedTypes.length === 0 || generating}
+                className="gap-2"
+              >
                 {generating ? (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin" /> Generating…
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {genProgress
+                      ? `Generating ${genProgress.done}/${genProgress.total}…`
+                      : "Generating…"}
                   </>
                 ) : (
                   <>
-                    <Sparkles className="h-4 w-4" /> Generate
+                    <Sparkles className="h-4 w-4" />
+                    Generate
+                    {selectedTypes.length > 1
+                      ? ` (${selectedTypes.length})`
+                      : selectedTypes.length === 1
+                        ? ""
+                        : ""}
                   </>
                 )}
               </Button>
-              <Button variant="outline" onClick={() => setShowGenerator(false)}>
+              <Button
+                variant="outline"
+                onClick={() => setShowGenerator(false)}
+                disabled={generating}
+              >
                 Cancel
               </Button>
             </div>
@@ -252,6 +348,7 @@ function CreativesContent() {
           {creatives.map((c) => {
             const meta = CREATIVE_TYPES.find((t) => t.type === c.type);
             const Icon = meta?.icon || Sparkles;
+            const preview = formatCreativePreview(c.content, 320);
             return (
               <Card key={c.id} className="flex flex-col overflow-hidden">
                 <CardHeader className="pb-2">
@@ -285,12 +382,9 @@ function CreativesContent() {
                       </Badge>
                     )}
                   </div>
-                  <pre className="mb-4 max-h-32 flex-1 overflow-auto rounded-md bg-muted/50 p-3 text-xs leading-relaxed text-muted-foreground">
-                    {typeof c.content === "object"
-                      ? JSON.stringify(c.content, null, 2).slice(0, 400) +
-                        (JSON.stringify(c.content).length > 400 ? "…" : "")
-                      : String(c.content).slice(0, 400)}
-                  </pre>
+                  <div className="mb-4 max-h-36 flex-1 overflow-auto rounded-md bg-muted/50 p-3 text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                    {preview || "No content yet"}
+                  </div>
                   <div className="flex gap-2">
                     <Button
                       variant="outline"

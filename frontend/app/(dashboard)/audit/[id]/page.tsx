@@ -65,7 +65,6 @@ export default function AuditDetailPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  // Poll while processing — slower interval + backoff so we don't trip rate limits (429)
   useEffect(() => {
     if (!audit || !id) return;
     if (!["PENDING", "SCRAPING", "ANALYZING"].includes(audit.status)) return;
@@ -467,18 +466,31 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
             <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <MapPin className="h-3.5 w-3.5" />
               Target regions
+              {hasIndividuals && (
+                <span className="font-normal normal-case tracking-normal text-muted-foreground/80">
+                  — click a region to view personas
+                </span>
+              )}
             </p>
             <div className="flex flex-wrap gap-1.5">
               {targetRegions.map((r, i) => (
-                <Badge
+                <button
                   key={`${r.region}-${i}`}
-                  variant={r.priority === "primary" ? "default" : "outline"}
-                  className="text-xs font-normal"
-                  title={r.reason}
+                  type="button"
+                  title={r.reason || "View personas for this region"}
+                  onClick={() => {
+                    if (hasIndividuals) setExpanded(true);
+                  }}
+                  className={cn(
+                    "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-normal transition",
+                    r.priority === "primary"
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-input bg-background hover:bg-muted",
+                    hasIndividuals && "cursor-pointer hover:opacity-90"
+                  )}
                 >
                   {r.region}
-                  {r.priority === "primary" ? " · primary" : ""}
-                </Badge>
+                </button>
               ))}
             </div>
           </div>
