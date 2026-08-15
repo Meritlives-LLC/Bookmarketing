@@ -51,6 +51,22 @@ function readersForPlatform(all: ScrapedReader[], platform: Platform): ScrapedRe
   return (filtered.length ? filtered : all).slice(0, 6);
 }
 
+function safeSummary(
+  summary: unknown,
+  segment: ReaderSegment,
+  platform: Platform
+): string {
+  if (typeof summary === 'string' && summary.trim()) return summary.trim();
+  return `Audience insight for ${segment.replace(/_/g, ' ').toLowerCase()} on ${platform.toLowerCase()}.`;
+}
+
+function safeConfidence(confidence: unknown): number {
+  if (typeof confidence === 'number' && Number.isFinite(confidence)) {
+    return Math.min(1, Math.max(0, confidence));
+  }
+  return 0.4;
+}
+
 export const auditService = {
   async create(bookId: string, userId: string) {
     const book = await bookRepository.findByIdForUser(bookId, userId);
@@ -117,7 +133,7 @@ export const auditService = {
 
       await auditRepository.updateStatus(auditId, AuditStatus.ANALYZING);
 
-      // Sequential Groq calls — parallel Promise.all blows free-tier TPM (~8k/min)
+      // Sequential Groq calls — parallel Promise.all blows free-tier TPM
       const insights: Array<{
         segment: ReaderSegment;
         platform: Platform;
@@ -147,18 +163,18 @@ export const auditService = {
         insights.push({
           segment,
           platform,
-          summary: result.summary,
+          // Prisma requires non-null summary + finite confidence
+          summary: safeSummary(result.summary, segment, platform),
           data: {
-            ...result.data,
+            ...(result.data && typeof result.data === 'object' ? result.data : {}),
             sampleReaders,
             groundedInScrape: Boolean(scrapedContext),
             twitterSentiment:
               twitter && !twitter.error ? twitter.sentimentSummary : undefined,
           },
-          confidence: result.confidence,
+          confidence: safeConfidence(result.confidence),
         });
 
-        // Gap between calls (skip after last)
         if (i < SEGMENT_PLATFORM_MAP.length - 1) {
           await sleep(GROQ_GAP_MS);
         }
@@ -170,12 +186,25 @@ export const auditService = {
       const keywordResult = await aiService.generateKeywordSuggestions(book, scrapedContext);
       await auditRepository.addKeywordSuggestions(
         auditId,
-        keywordResult.keywords.map((k) => ({ ...k, platform: Platform.AMAZON }))
+        (keywordResult.keywords ?? []).map((k) => ({
+          keyword: k.keyword || 'untitled',
+          searchVolume: k.searchVolume ?? null,
+          suggestedBid: k.suggestedBid ?? null,
+          competition: k.competition ?? null,
+          platform: Platform.AMAZON,
+        }))
       );
 
       await sleep(GROQ_GAP_MS);
       const competitorResult = await aiService.generateCompetitorAnalysis(book, scrapedContext);
-      await auditRepository.addCompetitorAnalyses(auditId, competitorResult.competitors);
+      await auditRepository.addCompetitorAnalyses(
+        auditId,
+        (competitorResult.competitors ?? []).map((c) => ({
+          competitorName: c.competitorName || 'Unknown competitor',
+          strengths: Array.isArray(c.strengths) ? c.strengths : [],
+          weaknesses: Array.isArray(c.weaknesses) ? c.weaknesses : [],
+        }))
+      );
 
       await auditRepository.markCompleted(auditId);
     } catch (error) {
