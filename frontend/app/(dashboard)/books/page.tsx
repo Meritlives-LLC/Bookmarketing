@@ -123,12 +123,11 @@ export default function BooksPage() {
       )}
 
       {loading && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-48 rounded-xl" />
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="aspect-[2/3] w-full rounded-xl" />
           ))}
         </div>
-      )}
 
       {error && (
         <Card>
