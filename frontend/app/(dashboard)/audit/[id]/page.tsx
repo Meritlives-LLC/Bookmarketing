@@ -211,21 +211,9 @@ export default function AuditDetailPage() {
       {audit.status === "COMPLETED" && (
         <>
           <div className="grid gap-4 sm:grid-cols-3">
-            <StatCard
-              icon={Users}
-              label="Reader segments"
-              value={String(insights.length)}
-            />
-            <StatCard
-              icon={Key}
-              label="Keyword suggestions"
-              value={String(keywords.length)}
-            />
-            <StatCard
-              icon={Swords}
-              label="Competitors analyzed"
-              value={String(competitors.length)}
-            />
+            <StatCard icon={Users} label="Reader segments" value={String(insights.length)} />
+            <StatCard icon={Key} label="Keyword suggestions" value={String(keywords.length)} />
+            <StatCard icon={Swords} label="Competitors analyzed" value={String(competitors.length)} />
           </div>
 
           <div className="flex gap-2 border-b">
@@ -421,18 +409,57 @@ function StatCard({
   );
 }
 
+function normalizeRegion(value?: string | null): string {
+  return (value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Match "United States", "US", "Other", "OTHER", "Rest of world", etc. */
+function regionMatches(a?: string | null, b?: string | null): boolean {
+  const na = normalizeRegion(a);
+  const nb = normalizeRegion(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const otherish = (s: string) =>
+    s === "other" ||
+    s === "others" ||
+    s === "rest of world" ||
+    s === "row" ||
+    s === "international";
+  if (otherish(na) && otherish(nb)) return true;
+  return na.includes(nb) || nb.includes(na);
+}
+
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
 function AudienceCard({ insight }: { insight: AudienceInsight }) {
   const [expanded, setExpanded] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState<string | null>(null);
+
   const data = (insight.data || {}) as AudienceInsightData;
   const sampleReaders = asArray<SampleReader>(data.sampleReaders);
   const personas = asArray<AudiencePersona>(data.personas);
   const targetRegions = asArray<TargetRegion>(data.targetRegions);
   const grounded = Boolean(data.groundedInScrape);
   const hasIndividuals = sampleReaders.length > 0 || personas.length > 0;
+
+  const filteredPersonas = selectedRegion
+    ? personas.filter((p) => regionMatches(p.region, selectedRegion))
+    : personas;
+
+  const filteredReaders = sampleReaders;
+
+  const activeRegionMeta = selectedRegion
+    ? targetRegions.find((r) => regionMatches(r.region, selectedRegion))
+    : undefined;
+
+  function handleRegionClick(region: string) {
+    const next =
+      selectedRegion && regionMatches(selectedRegion, region) ? null : region;
+    setSelectedRegion(next);
+    setExpanded(true);
+  }
 
   return (
     <Card className="overflow-hidden">
@@ -466,33 +493,46 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
             <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <MapPin className="h-3.5 w-3.5" />
               Target regions
-              {hasIndividuals && (
-                <span className="font-normal normal-case tracking-normal text-muted-foreground/80">
-                  — click a region to view personas
-                </span>
-              )}
+              <span className="font-normal normal-case tracking-normal text-muted-foreground/80">
+                — click a region to filter
+              </span>
             </p>
             <div className="flex flex-wrap gap-1.5">
-              {targetRegions.map((r, i) => (
-                <button
-                  key={`${r.region}-${i}`}
-                  type="button"
-                  title={r.reason || "View personas for this region"}
-                  onClick={() => {
-                    if (hasIndividuals) setExpanded(true);
-                  }}
-                  className={cn(
-                    "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-normal transition",
-                    r.priority === "primary"
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-input bg-background hover:bg-muted",
-                    hasIndividuals && "cursor-pointer hover:opacity-90"
-                  )}
-                >
-                  {r.region}
-                </button>
-              ))}
+              {targetRegions.map((r, i) => {
+                const active =
+                  selectedRegion != null &&
+                  regionMatches(r.region, selectedRegion);
+                return (
+                  <button
+                    key={`${r.region}-${i}`}
+                    type="button"
+                    title={r.reason || `View insights for ${r.region}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleRegionClick(r.region);
+                    }}
+                    className={cn(
+                      "inline-flex cursor-pointer items-center rounded-full border px-2.5 py-0.5 text-xs font-normal transition",
+                      active || r.priority === "primary"
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-input bg-background hover:bg-muted",
+                      active && "ring-2 ring-primary ring-offset-1"
+                    )}
+                  >
+                    {r.region}
+                  </button>
+                );
+              })}
             </div>
+            {activeRegionMeta?.reason && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  {activeRegionMeta.region}:
+                </span>{" "}
+                {activeRegionMeta.reason}
+              </p>
+            )}
           </div>
         )}
 
@@ -507,11 +547,14 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
               Individuals
               <span className="text-xs font-normal text-muted-foreground">
                 {[
-                  sampleReaders.length > 0 && `${sampleReaders.length} readers`,
-                  personas.length > 0 && `${personas.length} personas`,
+                  filteredReaders.length > 0 &&
+                    `${filteredReaders.length} readers`,
+                  filteredPersonas.length > 0 &&
+                    `${filteredPersonas.length} personas`,
+                  selectedRegion && `· ${selectedRegion}`,
                 ]
                   .filter(Boolean)
-                  .join(" · ")}
+                  .join(" ")}
               </span>
             </span>
             {expanded ? (
@@ -524,14 +567,27 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
 
         {expanded && (
           <div className="space-y-4 border-t pt-3">
-            {sampleReaders.length > 0 && (
+            {selectedRegion && (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <Badge variant="secondary">Filtered: {selectedRegion}</Badge>
+                <button
+                  type="button"
+                  className="text-primary hover:underline"
+                  onClick={() => setSelectedRegion(null)}
+                >
+                  Clear filter
+                </button>
+              </div>
+            )}
+
+            {filteredReaders.length > 0 && (
               <div>
                 <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   <Quote className="h-3.5 w-3.5" />
                   Sample readers (scraped)
                 </p>
                 <ul className="space-y-3">
-                  {sampleReaders.map((r, i) => (
+                  {filteredReaders.map((r, i) => (
                     <li
                       key={`${r.name}-${i}`}
                       className="rounded-lg border bg-background p-3"
@@ -558,7 +614,7 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
                       </div>
                       {r.quote && (
                         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                          “{r.quote}”
+                          &ldquo;{r.quote}&rdquo;
                         </p>
                       )}
                     </li>
@@ -567,14 +623,15 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
               </div>
             )}
 
-            {personas.length > 0 && (
+            {filteredPersonas.length > 0 && (
               <div>
                 <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                   <UserCircle2 className="h-3.5 w-3.5" />
                   Personas
+                  {selectedRegion ? ` · ${selectedRegion}` : ""}
                 </p>
                 <ul className="space-y-3">
-                  {personas.map((p, i) => (
+                  {filteredPersonas.map((p, i) => (
                     <li
                       key={`${p.label}-${i}`}
                       className="rounded-lg border bg-background p-3"
@@ -595,7 +652,7 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
                       {p.evidenceQuote && (
                         <p className="mt-2 border-l-2 border-primary/30 pl-2 text-xs italic text-muted-foreground">
                           {p.evidenceSource ? `[${p.evidenceSource}] ` : ""}
-                          “{p.evidenceQuote}”
+                          &ldquo;{p.evidenceQuote}&rdquo;
                         </p>
                       )}
                     </li>
@@ -604,9 +661,11 @@ function AudienceCard({ insight }: { insight: AudienceInsight }) {
               </div>
             )}
 
-            {sampleReaders.length === 0 && personas.length === 0 && (
+            {filteredReaders.length === 0 && filteredPersonas.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                No individual readers or personas for this segment yet.
+                {selectedRegion
+                  ? `No personas tagged for "${selectedRegion}". Clear the filter to see all.`
+                  : "No individual readers or personas for this segment yet."}
               </p>
             )}
           </div>

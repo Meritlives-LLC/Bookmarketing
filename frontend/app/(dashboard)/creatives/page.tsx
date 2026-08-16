@@ -87,22 +87,27 @@ function CreativesContent() {
   }, [bookId]);
 
   function toggleType(type: CreativeType) {
-    setSelectedTypes((prev) =>
-      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
-    );
+    setSelectedTypes((prev) => {
+      if (prev.includes(type)) return prev.filter((t) => t !== type);
+      return [...prev, type];
+    });
   }
 
   async function generate() {
     if (!bookId || selectedTypes.length === 0) return;
+
+    // Snapshot so clearing UI mid-run doesn't change the queue
+    const typesToGenerate = [...selectedTypes];
+
     setGenerating(true);
     setError("");
-    setGenProgress({ done: 0, total: selectedTypes.length });
+    setGenProgress({ done: 0, total: typesToGenerate.length });
 
     const created: Creative[] = [];
     const failures: string[] = [];
 
-    for (let i = 0; i < selectedTypes.length; i++) {
-      const type = selectedTypes[i];
+    for (let i = 0; i < typesToGenerate.length; i++) {
+      const type = typesToGenerate[i];
       try {
         const creative = await api.post<Creative>("/creatives/generate", {
           bookId,
@@ -110,17 +115,19 @@ function CreativesContent() {
           segment: selectedSegment || undefined,
         });
         created.push(creative);
+        // Live list update so each success appears even if later types fail
+        setCreatives((prev) => [creative, ...prev]);
       } catch (e) {
-        const label = CREATIVE_TYPES.find((t) => t.type === type)?.label || type;
+        const label =
+          CREATIVE_TYPES.find((t) => t.type === type)?.label || type;
         failures.push(
           `${label}: ${e instanceof ApiError ? e.message : "failed"}`
         );
       }
-      setGenProgress({ done: i + 1, total: selectedTypes.length });
+      setGenProgress({ done: i + 1, total: typesToGenerate.length });
     }
 
     if (created.length > 0) {
-      setCreatives((prev) => [...created, ...prev]);
       setShowGenerator(false);
       setSelectedTypes([]);
       setSelectedSegment("");
@@ -229,25 +236,33 @@ function CreativesContent() {
                     <button
                       key={t.type}
                       type="button"
-                      onClick={() => toggleType(t.type)}
+                      role="checkbox"
+                      aria-checked={selected}
+                      disabled={generating}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!generating) toggleType(t.type);
+                      }}
                       className={cn(
                         "flex items-start gap-3 rounded-lg border p-3 text-left transition",
                         selected
                           ? "border-primary bg-primary/5 ring-1 ring-primary"
-                          : "hover:bg-muted/50"
+                          : "hover:bg-muted/50",
+                        generating && "pointer-events-none opacity-60"
                       )}
                     >
                       <t.icon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium">{t.label}</p>
-                        <p className="text-xs text-muted-foreground">{t.description}</p>
-                      </div>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">{t.label}</span>
+                        <span className="block text-xs text-muted-foreground">{t.description}</span>
+                      </span>
                       <span
                         className={cn(
-                          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
+                          "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs",
                           selected
                             ? "border-primary bg-primary text-primary-foreground"
-                            : "border-muted-foreground/40"
+                            : "border-input"
                         )}
                       >
                         {selected ? "✓" : ""}
