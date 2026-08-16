@@ -395,7 +395,6 @@ export const groqAiService = {
         'Transparent authorship, value-first, no hard sell, no link in the body.',
         'title: under 15 words, no emoji/clickbait.',
         'body: 3–4 short paragraphs ending in a real discussion question.',
-        ,
       ],
       schema: `{
   "suggestedSubreddit": string,
