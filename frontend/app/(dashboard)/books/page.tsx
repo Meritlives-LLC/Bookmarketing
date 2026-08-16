@@ -14,6 +14,11 @@ import type { Book } from "@/types";
 
 const PAGE_SIZE = 20;
 
+type BooksListMeta = {
+  total?: number;
+  page?: number;
+};
+
 export default function BooksPage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,11 +28,9 @@ export default function BooksPage() {
   const [genre, setGenre] = useState("");
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const requestIdRef = useRef(0);
-  
 
-  // Reset to page 1 whenever the filters change, and debounce the search
-  // input so we're not hitting the API on every keystroke.
   useEffect(() => {
     const requestId = ++requestIdRef.current;
     const timer = setTimeout(() => {
@@ -35,15 +38,17 @@ export default function BooksPage() {
       const params = new URLSearchParams({ page: "1", limit: String(PAGE_SIZE) });
       if (search) params.set("search", search);
       if (genre) params.set("genre", genre);
-      apiGetWithMeta<Book[], { total?: number; page?: number }>(`/books?${params.toString()}`)
+      apiGetWithMeta<Book[], BooksListMeta>(`/books?${params.toString()}`)
         .then(({ data, meta }) => {
-          if (requestId !== requestIdRef.current) return; // stale response
+          if (requestId !== requestIdRef.current) return;
           setBooks(data);
           setPage(1);
           setTotal(meta.total ?? data.length);
         })
         .catch((e) => {
-          if (requestId === requestIdRef.current) setError(e.message || "Failed to load books");
+          if (requestId === requestIdRef.current) {
+            setError(e.message || "Failed to load books");
+          }
         })
         .finally(() => {
           if (requestId === requestIdRef.current) setLoading(false);
@@ -57,10 +62,15 @@ export default function BooksPage() {
     const nextPage = page + 1;
     setLoadingMore(true);
     try {
-      const params = new URLSearchParams({ page: String(nextPage), limit: String(PAGE_SIZE) });
+      const params = new URLSearchParams({
+        page: String(nextPage),
+        limit: String(PAGE_SIZE),
+      });
       if (search) params.set("search", search);
       if (genre) params.set("genre", genre);
-      const { data, meta } = await apiGetWithMeta<Book[], { total?: number }>(`/books?${params.toString()}`);
+      const { data, meta } = await apiGetWithMeta<Book[], BooksListMeta>(
+        `/books?${params.toString()}`
+      );
       setBooks((prev) => [...prev, ...data]);
       setPage(nextPage);
       if (meta.total != null) setTotal(meta.total);
@@ -70,7 +80,6 @@ export default function BooksPage() {
       setLoadingMore(false);
     }
   }
-
 
   async function handleDelete(book: Book) {
     if (
@@ -94,8 +103,6 @@ export default function BooksPage() {
   }
 
   const hasMore = books.length < total;
-
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 animate-fade-in">
@@ -128,6 +135,7 @@ export default function BooksPage() {
             <Skeleton key={i} className="aspect-[2/3] w-full rounded-xl" />
           ))}
         </div>
+      )}
 
       {error && (
         <Card>
@@ -142,7 +150,9 @@ export default function BooksPage() {
           <CardContent className="p-0">
             <EmptyState
               icon={BookOpen}
-              title={search || genre ? "No books match your filters" : "No books yet"}
+              title={
+                search || genre ? "No books match your filters" : "No books yet"
+              }
               description={
                 search || genre
                   ? "Try a different search term or clear the genre filter."
@@ -157,10 +167,19 @@ export default function BooksPage() {
 
       {!loading && books.length > 0 && (
         <>
-          <BookList books={books} onDelete={handleDelete} deletingId={deletingId} />
+          <BookList
+            books={books}
+            onDelete={handleDelete}
+            deletingId={deletingId}
+          />
           {hasMore && (
             <div className="flex justify-center pt-2">
-              <Button variant="outline" onClick={loadMore} disabled={loadingMore} className="gap-2">
+              <Button
+                variant="outline"
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="gap-2"
+              >
                 {loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
                 Load more ({books.length} of {total})
               </Button>
