@@ -119,11 +119,19 @@ export const aiService = {
     );
   },
 
-  async generateTikTokScript(book: Book) {
+  async generateTikTokScript(book: Book, personaNotes?: string) {
     return withFallback(
       'generateTikTokScript',
-      () => groqAiService.generateTikTokScript(book),
-      () => localAiService.generateTikTokScript(book)
+      () => groqAiService.generateTikTokScript(book, personaNotes),
+      () => localAiService.generateTikTokScript(book, personaNotes)
+    );
+  },
+
+  async generateYoutubeScript(book: Book, personaNotes?: string) {
+    return withFallback(
+      'generateYoutubeScript',
+      () => groqAiService.generateYoutubeScript(book, personaNotes),
+      () => localAiService.generateYoutubeScript(book, personaNotes)
     );
   },
 
@@ -158,7 +166,7 @@ export const aiService = {
       () => localAiService.generateRedditPost(book)
     );
   },
-  
+
   async generateAdSuite(book: Book, segment?: string, personaNotes?: string) {
     return withFallback(
       'generateAdSuite',
