@@ -38,13 +38,15 @@ export function BookCard({
       )}
 
       <Link href={`/books/${book.id}`} className="block h-full">
-        <div className="aspect-[2/3] max-h-48 bg-gradient-to-br from-brand-100 to-brand-200 dark:from-brand-900 dark:to-brand-800">
+        <div className="aspect-[2/3] max-h-48 w-full overflow-hidden bg-gradient-to-br from-brand-100 to-brand-200 dark:from-brand-900 dark:to-brand-800">
           {book.coverImageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={book.coverImageUrl}
               alt={book.title}
-              className="h-full w-full object-cover"
+              className="h-full w-full object-cover object-top"
+              loading="lazy"
+              referrerPolicy="no-referrer"
             />
           ) : (
             <div className="flex h-full items-center justify-center">

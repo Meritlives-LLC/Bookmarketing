@@ -111,6 +111,20 @@ export const config = {
     s3Bucket: process.env.AWS_S3_BUCKET ?? 'bookmarketingos-uploads',
   },
 
+  cloudinary: (() => {
+    const cloudName = (process.env.CLOUDINARY_CLOUD_NAME ?? '').trim();
+    const apiKey = (process.env.CLOUDINARY_API_KEY ?? '').trim();
+    const apiSecret = (process.env.CLOUDINARY_API_SECRET ?? '').trim();
+    const folder = (process.env.CLOUDINARY_FOLDER ?? 'book-covers').trim() || 'book-covers';
+    return {
+      enabled: Boolean(cloudName && apiKey && apiSecret),
+      cloudName,
+      apiKey,
+      apiSecret,
+      folder,
+    };
+  })(),
+
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY ?? '',
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? '',

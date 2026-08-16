@@ -18,6 +18,8 @@ export const bookService = {
     try {
       const resolved = await resolveCoverImageUrl({
         coverImageUrl,
+        amazonUrl: enriched.amazonUrl,
+        goodreadsUrl: enriched.goodreadsUrl,
         isbn: enriched.isbn,
         asin: enriched.asin,
         title: enriched.title,
@@ -61,6 +63,8 @@ export const bookService = {
       try {
         coverImageUrl = await resolveCoverImageUrl({
           coverImageUrl: null,
+          amazonUrl: enriched.amazonUrl,
+          goodreadsUrl: enriched.goodreadsUrl,
           isbn: enriched.isbn,
           asin: enriched.asin,
           title: typeof enriched.title === "string" ? enriched.title : undefined,

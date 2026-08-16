@@ -110,7 +110,9 @@ export default function BookDetailPage({
                 <img
                   src={book.coverImageUrl}
                   alt={book.title}
-                  className="h-full w-full object-cover"
+                  className="h-full w-full object-cover object-top"
+                  loading="lazy"
+                  referrerPolicy="no-referrer"
                 />
               ) : (
                 <div className="flex h-full items-center justify-center">
