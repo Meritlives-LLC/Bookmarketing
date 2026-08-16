@@ -55,6 +55,7 @@
     "nodemailer": "6.9.7",
     "axios": "1.6.5",
     "cheerio": "^1.0.0",
+    "cloudinary": "^2.5.1",
     "uuid": "9.0.1",
     "date-fns": "3.0.6",
     "node-cron": "3.0.3"

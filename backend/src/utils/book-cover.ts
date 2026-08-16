@@ -2,18 +2,21 @@
  * Resolve a real book cover image URL.
  *
  * Priority:
- * 1. Explicit coverImageUrl from client
+ * 1. Explicit coverImageUrl from client (still uploaded to Cloudinary when enabled)
  * 2. Scrape og:image / main product image from Amazon or Goodreads URL
- *    (matches the exact listing the user linked) — cached via scrapeCache
+ *    (cached via scrapeCache)
  * 3. Direct Amazon ASIN image URL
  * 4. Google Books / Open Library by ISBN or ASIN / title (fallback)
  *
- * Used when creating/updating a book so BookCard can show the correct cover.
+ * Final step: when Cloudinary is configured, upload the chosen source image and
+ * return the Cloudinary HTTPS URL (cached by source URL).
  */
 
 import axios from "axios";
 import * as cheerio from "cheerio";
 import { scrapeCache } from "../services/scrape-cache.service";
+import { cloudinaryService } from "../services/cloudinary.service";
+import { logger } from "./logger";
 
 const REQUEST_HEADERS = {
   "User-Agent":
@@ -24,8 +27,11 @@ const REQUEST_HEADERS = {
 
 /** Cover scrape results are stable; cache longer than review scrapes. */
 const COVER_CACHE_TTL_SEC = 60 * 60 * 24 * 7; // 7 days
+/** Cloudinary delivery URLs for a given source — also 7 days. */
+const CLOUDINARY_CACHE_TTL_SEC = 60 * 60 * 24 * 7;
 
 type CachedCover = { url: string };
+type CachedCloudinary = { url: string };
 
 function normalizeIsbn(raw: string): string {
   return raw.replace(/[-\s]/g, "").toUpperCase();
@@ -35,16 +41,14 @@ function isLikelyCoverUrl(url: string | undefined | null): boolean {
   if (!url || typeof url !== "string") return false;
   const u = url.trim();
   if (!u.startsWith("http") && !u.startsWith("//")) return false;
-  // Skip tiny icons, tracking pixels, sprites
   if (/\.(svg|gif)(\?|$)/i.test(u)) return false;
   if (/sprite|icon|logo|pixel|1x1|spacer/i.test(u)) return false;
   return true;
 }
 
-/** Prefer larger Amazon image variants when possible. */
 function upgradeAmazonImageUrl(url: string): string {
   return url
-    .replace(/\._[A-Z0-9]+_\./g, ".") // strip size tokens like ._SX300_.
+    .replace(/\._[A-Z0-9]+_\./g, ".")
     .replace(/\._AC_[A-Z0-9_]+_\./g, ".")
     .replace(/\._SL\d+_\./g, ".")
     .replace(/\._UX\d+_\./g, ".")
@@ -66,7 +70,6 @@ async function scrapeCoverFromPage(
 
     const candidates: string[] = [];
 
-    // 1. Open Graph / Twitter card (most reliable for the listing image)
     const og =
       $('meta[property="og:image"]').attr("content") ||
       $('meta[property="og:image:secure_url"]').attr("content") ||
@@ -93,7 +96,6 @@ async function scrapeCoverFromPage(
         $("img[data-a-dynamic-image]").first().attr("src");
       if (landing) candidates.push(landing.trim());
 
-      // data-a-dynamic-image is a JSON map of url -> [w,h]; pick largest
       const dyn = $("img[data-a-dynamic-image]").first().attr("data-a-dynamic-image");
       if (dyn) {
         try {
@@ -121,10 +123,6 @@ async function scrapeCoverFromPage(
   }
 }
 
-/**
- * Scrape cover from Amazon/Goodreads with memory+Redis cache.
- * Cache key is the page URL so the same listing is not re-fetched.
- */
 async function getCachedScrapedCover(
   pageUrl: string,
   source: "amazon" | "goodreads"
@@ -145,7 +143,6 @@ async function getCachedScrapedCover(
   return undefined;
 }
 
-/** Direct Amazon image URL from ASIN (works for many retail listings). */
 function amazonAsinCover(asin: string): string {
   const id = asin.trim().toUpperCase();
   return `https://m.media-amazon.com/images/P/${id}.01.LZZZZZZZ.jpg`;
@@ -202,7 +199,39 @@ async function googleBooksCover(isbn: string): Promise<string | undefined> {
   }
 }
 
-export async function resolveCoverImageUrl(opts: {
+/**
+ * Upload source image to Cloudinary (when enabled) and cache the delivery URL.
+ * Falls back to the original source URL on failure or if Cloudinary is disabled.
+ */
+async function toCloudinaryUrl(sourceUrl: string): Promise<string> {
+  if (!cloudinaryService.isEnabled()) return sourceUrl;
+
+  const identity = sourceUrl.trim();
+  const cached = await scrapeCache.get<CachedCloudinary>("cover-cloudinary", identity);
+  if (cached?.url && isLikelyCoverUrl(cached.url)) {
+    return cached.url;
+  }
+
+  try {
+    const uploaded = await cloudinaryService.uploadRemote(identity);
+    if (uploaded) {
+      await scrapeCache.set(
+        "cover-cloudinary",
+        identity,
+        { url: uploaded },
+        CLOUDINARY_CACHE_TTL_SEC
+      );
+      return uploaded;
+    }
+  } catch (error) {
+    logger.warn("Cloudinary cover upload error", {
+      error: (error as Error).message,
+    });
+  }
+  return sourceUrl;
+}
+
+async function resolveSourceCoverUrl(opts: {
   coverImageUrl?: string | null;
   amazonUrl?: string | null;
   goodreadsUrl?: string | null;
@@ -220,7 +249,6 @@ export async function resolveCoverImageUrl(opts: {
   const asin = opts.asin?.trim();
   const title = opts.title?.trim();
 
-  // Prefer the exact image from the page the user linked (cached)
   if (amazonUrl && /amazon\./i.test(amazonUrl)) {
     const scraped = await getCachedScrapedCover(amazonUrl, "amazon");
     if (scraped) return scraped;
@@ -231,7 +259,6 @@ export async function resolveCoverImageUrl(opts: {
     if (scraped) return scraped;
   }
 
-  // ASIN direct image (deterministic URL — no scrape needed)
   if (asin && /^[A-Z0-9]{10}$/i.test(asin)) {
     return amazonAsinCover(asin);
   }
@@ -253,4 +280,17 @@ export async function resolveCoverImageUrl(opts: {
   }
 
   return undefined;
+}
+
+export async function resolveCoverImageUrl(opts: {
+  coverImageUrl?: string | null;
+  amazonUrl?: string | null;
+  goodreadsUrl?: string | null;
+  isbn?: string | null;
+  asin?: string | null;
+  title?: string | null;
+}): Promise<string | undefined> {
+  const source = await resolveSourceCoverUrl(opts);
+  if (!source) return undefined;
+  return toCloudinaryUrl(source);
 }
