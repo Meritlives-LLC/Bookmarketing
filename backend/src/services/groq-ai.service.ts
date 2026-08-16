@@ -221,14 +221,11 @@ export const groqAiService = {
   },
 
   /**
-   * Full ad creative suite: headlines, bodies, CTAs, visuals, platform packs.
+   * Full ad creative suite: 5-of-core-assets, Google, Pinterest, Stories,
+   * Amazon ad products, performance forecasts, formal framework.
    * Optional personaNotes from audit (real scraped personas only).
    */
-  async generateAdSuite(
-    book: Book,
-    segment?: string,
-    personaNotes?: string
-  ) {
+  async generateAdSuite(book: Book, segment?: string, personaNotes?: string) {
     const segmentPart = segment
       ? `Primary reader segment: "${segmentLabel(segment)}".`
       : 'Primary reader segment: general readers of this genre.';
@@ -243,35 +240,63 @@ export const groqAiService = {
         personaPart,
         'All copy must be specific to THIS book — no generic filler.',
         'No spoilers of major plot twists. Do not invent awards, ranks, or review counts.',
-        'Headlines: under 12 words each. Bodies: 2–4 sentences. CTAs: short and action-oriented.',
-        'Visuals: descriptive enough for a designer or image model; include a midjourney-style imagePrompt.',
-        'Platform packs must be ready to paste into ads managers (platform-appropriate length).',
-        'Vary psychological angles across headlines (curiosity, benefit, social proof, urgency, emotion).',
+        'Exactly 5 headlines, 5 bodies, 5 ctas, 5 visuals, 5 amazonAdProducts, 5 performanceForecasts.',
+        'Headlines: under 12 words. Bodies: 2–4 sentences. CTAs: short and action-oriented.',
+        'framework: name a real structure (PAS, AIDA, Hook-Story-Offer, etc.) and explain why it fits THIS book.',
+        'Visuals: designer-ready; include a midjourney-style imagePrompt tied to this book’s mood/genre.',
+        'Include Google RSA fields, Pinterest pin copy, and Instagram Stories frames.',
+        'amazonAdProducts: cover Sponsored Products, Sponsored Brands, Sponsored Display, Amazon DSP, and one deal/promo product.',
+        'performanceForecasts: honest ranges with explicit assumptions (not guaranteed results).',
+        'Vary psychological angles (curiosity, benefit, social proof, urgency, emotion).',
       ],
       schema: `{
-  "headlines": [ { "text": string, "trigger": string, "platformFit": string } ],  // exactly 10
-  "bodies": [ { "text": string, "emotion": string, "painPoint": string } ],  // exactly 8
-  "ctas": [ { "text": string, "style": string } ],  // exactly 10
+  "framework": { "name": string, "steps": string[], "whyItFitsThisBook": string },
+  "headlines": [ { "text": string, "trigger": string, "platformFit": string } ],
+  "bodies": [ { "text": string, "emotion": string, "painPoint": string } ],
+  "ctas": [ { "text": string, "style": string } ],
   "visuals": [ {
-    "type": "hero" | "carousel" | "video",
+    "type": "hero" | "carousel" | "story" | "pin" | "youtube" | "video",
     "title": string,
     "description": string,
     "colorPalette": string,
     "mood": string,
     "imagePrompt": string
-  } ],  // 5–8 items
+  } ],
   "platforms": {
     "facebook": [ { "primaryText": string, "headline": string, "description": string, "cta": string } ],
     "instagram": [ { "caption": string, "headline": string, "cta": string, "hashtags": string[] } ],
+    "instagramStories": [ { "frame": number, "text": string, "visual": string, "stickerCta": string } ],
     "tiktok": [ { "hook": string, "script": string, "cta": string, "onScreenText": string } ],
+    "google": [ { "headline1": string, "headline2": string, "headline3": string, "description1": string, "description2": string, "path1": string, "path2": string } ],
+    "pinterest": [ { "title": string, "description": string, "boardSuggestion": string, "imagePrompt": string } ],
     "amazon": [ { "headline": string, "keywords": string[], "notes": string } ],
     "email": [ { "subject": string, "preheader": string, "body": string, "cta": string } ]
   },
+  "amazonAdProducts": [
+    {
+      "product": "Sponsored Products" | "Sponsored Brands" | "Sponsored Display" | "Amazon DSP" | "Kindle Countdown / Deal",
+      "objective": string,
+      "targetingNotes": string,
+      "sampleCopy": string,
+      "bidGuidance": string
+    }
+  ],
+  "performanceForecasts": [
+    {
+      "channel": string,
+      "metric": string,
+      "rangeLow": number,
+      "rangeHigh": number,
+      "unit": string,
+      "assumptions": string
+    }
+  ],
   "abTests": [ { "name": string, "control": string, "variantA": string, "variantB": string, "hypothesis": string } ]
 }`,
     });
 
     type AdSuiteResult = {
+      framework?: { name?: string; steps?: string[]; whyItFitsThisBook?: string };
       headlines: Array<{ text: string; trigger?: string; platformFit?: string }>;
       bodies: Array<{ text: string; emotion?: string; painPoint?: string }>;
       ctas: Array<{ text: string; style?: string }>;
@@ -286,45 +311,112 @@ export const groqAiService = {
       platforms?: {
         facebook?: Array<Record<string, unknown>>;
         instagram?: Array<Record<string, unknown>>;
+        instagramStories?: Array<Record<string, unknown>>;
         tiktok?: Array<Record<string, unknown>>;
+        google?: Array<Record<string, unknown>>;
+        pinterest?: Array<Record<string, unknown>>;
         amazon?: Array<Record<string, unknown>>;
         email?: Array<Record<string, unknown>>;
       };
+      amazonAdProducts?: Array<Record<string, unknown>>;
+      performanceForecasts?: Array<Record<string, unknown>>;
       abTests?: Array<Record<string, unknown>>;
     };
 
     return askJSON<AdSuiteResult>(prompt, {
       temperature: 0.85,
-      maxTokens: 4500,
+      maxTokens: 5500,
     });
   },
 
-  async generateTikTokScript(book: Book) {
+  /**
+   * Deep TikTok / Reels / Stories script. Optional personaNotes from audit.
+   */
+  async generateTikTokScript(book: Book, personaNotes?: string) {
+    const personaPart = personaNotes?.trim()
+      ? `Ground hooks in these real audience notes (do not invent people):\n${personaNotes.trim().slice(0, 1000)}`
+      : 'No live audience notes — use only THIS book’s title, genre, and description. No generic tropes.';
+
     const prompt = buildUserPrompt({
-      task: 'TASK: Write a 30-second BookTok-style spoken script (no hashtags in body).',
+      task:
+        'TASK: Write a production-ready 30–45s BookTok / IG Reels / Stories script specific to THIS book.',
       book,
       rules: [
-        'hook: first 0–3 seconds — pattern interrupt or trope callout.',
-        'body: 4–25s — tension/stakes without spoilers.',
-        'cta: 26–30s — soft watch/read prompt.',
+        personaPart,
+        'Reference concrete details from the book description — never generic "this book hits different".',
+        'Include on-screen text and beat timing.',
+        'Exactly 5 alternate hooks in hookVariants.',
+        'storiesFrames: 3–5 frames usable as Instagram/Facebook Stories.',
+        'No invented reviews, rankings, or awards.',
       ],
       schema: `{
+  "durationSec": number,
   "hook": string,
-  "body": string,
-  "cta": string
+  "hookVariants": string[],
+  "beats": [ { "atSec": number, "spoken": string, "onScreenText": string, "visual": string } ],
+  "cta": string,
+  "sounds": string[],
+  "hashtags": string[],
+  "storiesFrames": [ { "frame": number, "text": string, "visual": string, "sticker": string } ]
 }`,
     });
-    const result = await askJSON<{ hook: string; body: string; cta: string }>(prompt, {
-      temperature: 0.9,
-      maxTokens: 600,
+
+    return askJSON<{
+      durationSec: number;
+      hook: string;
+      hookVariants: string[];
+      beats: Array<{ atSec: number; spoken: string; onScreenText: string; visual: string }>;
+      cta: string;
+      sounds: string[];
+      hashtags: string[];
+      storiesFrames: Array<{ frame: number; text: string; visual: string; sticker: string }>;
+    }>(prompt, { temperature: 0.85, maxTokens: 1400 });
+  },
+
+  /**
+   * Full BookTube / trailer-style YouTube script. Not generic ad copy.
+   * Optional personaNotes from audit.
+   */
+  async generateYoutubeScript(book: Book, personaNotes?: string) {
+    const personaPart = personaNotes?.trim()
+      ? `Audience research (must shape tone and angles; do not invent people):\n${personaNotes.trim().slice(0, 1200)}`
+      : 'No live audience research — derive angles only from THIS book’s description.';
+
+    const prompt = buildUserPrompt({
+      task: 'TASK: Write a full BookTube / book-trailer style YouTube script for THIS specific book.',
+      book,
+      rules: [
+        personaPart,
+        'Open with a book-specific hook — not "hey guys welcome back".',
+        'Reference concrete plot/theme details from the description without major spoilers.',
+        'sections: timed blocks with spoken lines and broll suggestions.',
+        'Exactly 5 titleVariants and 5 thumbnailText options grounded in the book.',
+        'Do not invent awards, ranks, or review quotes.',
+      ],
+      schema: `{
+  "title": string,
+  "titleVariants": string[],
+  "thumbnailText": string[],
+  "hook": string,
+  "sections": [ { "name": string, "startSec": number, "spoken": string, "broll": string } ],
+  "cta": string,
+  "description": string,
+  "tags": string[],
+  "endScreen": string
+}`,
     });
-    return [
-      `HOOK (0-3s): ${result.hook}`,
-      '',
-      `BODY (4-25s): ${result.body}`,
-      '',
-      `CTA (26-30s): ${result.cta}`,
-    ].join('\n');
+
+    return askJSON<{
+      title: string;
+      titleVariants: string[];
+      thumbnailText: string[];
+      hook: string;
+      sections: Array<{ name: string; startSec: number; spoken: string; broll: string }>;
+      cta: string;
+      description: string;
+      tags: string[];
+      endScreen: string;
+    }>(prompt, { temperature: 0.75, maxTokens: 2000 });
   },
 
   async generateEmailCopy(book: Book) {
@@ -395,6 +487,7 @@ export const groqAiService = {
         'Transparent authorship, value-first, no hard sell, no link in the body.',
         'title: under 15 words, no emoji/clickbait.',
         'body: 3–4 short paragraphs ending in a real discussion question.',
+        'flairSuggestion: short, realistic flair for the subreddit.',
       ],
       schema: `{
   "suggestedSubreddit": string,
@@ -418,7 +511,7 @@ export const groqAiService = {
       book,
       rules: [
         `day is an integer from 1 to ${window}.`,
-        'platform is one of: instagram, tiktok, facebook, email, reddit, amazon.',
+        'platform is one of: instagram, tiktok, facebook, email, reddit, amazon, youtube, pinterest, google.',
         'action is concrete and under 12 words.',
         'Order events by day ascending; max 10 events.',
       ],

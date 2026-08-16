@@ -1,14 +1,43 @@
+"use client";
+
 import Link from "next/link";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import type { Book } from "@/types";
 import { GENRE_LABELS } from "@/lib/constants/genres";
 
-export function BookCard({ book }: { book: Book }) {
+export function BookCard({
+  book,
+  onDelete,
+  deleting,
+}: {
+  book: Book;
+  onDelete?: (book: Book) => void;
+  deleting?: boolean;
+}) {
   return (
-    <Link href={`/books/${book.id}`}>
-      <Card className="h-full overflow-hidden transition hover:shadow-md hover:border-primary/30">
+    <Card className="group relative h-full overflow-hidden transition hover:shadow-md hover:border-primary/30">
+      {onDelete && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="absolute right-2 top-2 z-10 h-9 w-9 bg-background/80 text-destructive opacity-100 shadow-sm backdrop-blur sm:opacity-0 sm:group-hover:opacity-100"
+          title="Delete book"
+          disabled={deleting}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDelete(book);
+          }}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      )}
+
+      <Link href={`/books/${book.id}`} className="block h-full">
         <div className="aspect-[2/3] max-h-48 bg-gradient-to-br from-brand-100 to-brand-200 dark:from-brand-900 dark:to-brand-800">
           {book.coverImageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -36,7 +65,7 @@ export function BookCard({ book }: { book: Book }) {
             </Badge>
           </div>
         </CardContent>
-      </Card>
-    </Link>
+      </Link>
+    </Card>
   );
 }

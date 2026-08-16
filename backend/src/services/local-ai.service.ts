@@ -11,16 +11,13 @@
  * and weave those into the output — so copy is grounded in what the book
  * actually says, not just genre boilerplate with a word or two swapped in.
  *
- * Every exported function mirrors the old `aiService` signatures exactly,
+ * Every exported function mirrors the groqAiService / aiService signatures
  * so nothing calling it needs to change.
  */
 import { Book } from '@prisma/client';
 import nlp from 'compromise';
 
 // ── deterministic "randomness" ────────────────────────────────────────────
-// Seeded by the book id (+ a salt per call site) so repeated calls for the
-// same book/segment/platform combination stay stable, while different
-// combinations still vary.
 function seedFrom(...parts: string[]): number {
   const str = parts.join('|');
   let hash = 0;
@@ -59,13 +56,12 @@ function genreLabel(genre: string): string {
 }
 
 // ── NLP-backed extraction from the book's own text ─────────────────────────
-// Everything here runs offline via `compromise` — no network, no model file.
 interface BookSignals {
-  sentences: string[]; // real sentences from the description, in order
-  hookSentence: string; // best single sentence to use as a hook/body seed
-  nounPhrases: string[]; // cleaned, deduped noun phrases (real themes/objects)
-  adjectives: string[]; // descriptive words actually used in the text
-  protagonist: string | null; // first detected person name, if any
+  sentences: string[];
+  hookSentence: string;
+  nounPhrases: string[];
+  adjectives: string[];
+  protagonist: string | null;
 }
 
 const GENERIC_NOUNS = new Set([
@@ -82,10 +78,10 @@ function analyzeBook(book: Pick<Book, 'title' | 'description'>): BookSignals {
     .map((s: string) => s.trim())
     .filter(Boolean);
 
-  // Prefer the longest early sentence as the "hook" — short opening
-  // fragments ("Book one in a new series.") make weak hooks on their own.
   const hookSentence =
-    sentences.slice(0, 3).sort((a: string, b: string) => b.length - a.length)[0] ?? sentences[0] ?? book.title;
+    sentences.slice(0, 3).sort((a: string, b: string) => b.length - a.length)[0] ??
+    sentences[0] ??
+    book.title;
 
   const people = doc.people().out('array') as string[];
   const protagonist = people.length > 0 ? people[0] : null;
@@ -128,7 +124,6 @@ function analyzeBook(book: Pick<Book, 'title' | 'description'>): BookSignals {
   return { sentences, hookSentence, nounPhrases, adjectives, protagonist };
 }
 
-// Truncates on a real sentence boundary instead of mid-word/mid-sentence.
 function excerptSentences(sentences: string[], maxChars: number): string {
   let out = '';
   for (const s of sentences) {
@@ -139,9 +134,6 @@ function excerptSentences(sentences: string[], maxChars: number): string {
   return out || sentences[0] || '';
 }
 
-// Strips a leading subordinating conjunction ("When", "As", "After", etc.)
-// so a sentence can be safely embedded into "What happens when X...?" style
-// hooks without producing "what happens when when...".
 function stripLeadingConjunction(sentence: string): string {
   return sentence.replace(/^(when|as|after|while|once|if)\s+/i, '');
 }
@@ -282,8 +274,9 @@ export const localAiService = {
         hates: traits.hates,
         searchBehavior: traits.searches,
         resonantThemes: themes,
+        sampleReaders: [] as Array<{ name: string; source: string; quote: string }>,
       },
-      confidence: 0.5 + (seed % 30) / 100, // 0.50–0.79, deliberately conservative
+      confidence: 0.5 + (seed % 30) / 100,
     };
   },
 
@@ -350,11 +343,13 @@ export const localAiService = {
     };
   },
 
+  /** Expanded suite: framework, 5-of-core, Google, Pinterest, Stories, Amazon products, forecasts. */
   async generateAdSuite(book: Book, segment?: string, _personaNotes?: string) {
     const seed = seedFrom(book.id, segment || 'suite', 'adsuite');
     const { sentences, hookSentence, protagonist } = analyzeBook(book);
     const genre = genreLabel(book.genre);
     const blurb = excerptSentences(sentences, 180) || book.description || book.title;
+    const themes = analyzeBook(book).nounPhrases.slice(0, 3);
 
     const headlineBases = [
       protagonist
@@ -364,11 +359,6 @@ export const localAiService = {
       `If you crave ${genre}, start here`,
       `What if ${stripLeadingConjunction(hookSentence).split(' ').slice(0, 8).join(' ').toLowerCase()}…`,
       `Readers can't put down "${book.title}"`,
-      `Your next late-night ${genre} binge`,
-      `One book. Zero chill.`,
-      `For fans who want more than the usual ${genre}`,
-      `Open "${book.title}" — and don't plan your evening`,
-      `The ${genre} story that stays with you`,
     ];
 
     const bodyBases = [
@@ -379,27 +369,28 @@ export const localAiService = {
         ? `Follow ${protagonist} through a ${genre} journey you won't forget. ${blurb}`
         : `A ${genre} experience built for readers who feel everything. ${blurb}`,
       `Stop scrolling. Start reading. ${blurb}`,
-      `When the blurb isn't enough — the pages will be. ${blurb}`,
-      `For your TBR if you love ${genre} that actually delivers.`,
-      `Clear your weekend. "${book.title}" does not share attention.`,
     ];
 
     const ctaBases = [
       { text: 'Get the book', style: 'benefit' },
       { text: 'Start reading', style: 'benefit' },
-      { text: 'Add to cart', style: 'urgency' },
       { text: 'Read the sample', style: 'curiosity' },
-      { text: 'Claim your copy', style: 'urgency' },
-      { text: 'See why readers rave', style: 'social_proof' },
-      { text: 'Open the first chapter', style: 'curiosity' },
-      { text: 'Buy now', style: 'urgency' },
-      { text: 'Discover the story', style: 'emotion' },
-      { text: 'Join the readers', style: 'social_proof' },
+      { text: 'Add to cart', style: 'urgency' },
+      { text: 'See why readers care', style: 'social_proof' },
     ];
 
-    const triggers = ['curiosity', 'benefit', 'emotion', 'social proof', 'urgency', 'trope', 'identity', 'FOMO', 'transformation', 'specificity'];
+    const triggers = ['curiosity', 'benefit', 'emotion', 'social proof', 'urgency'];
 
     return {
+      framework: {
+        name: 'Hook–Story–Offer',
+        steps: [
+          'Hook with a book-specific stakes line',
+          'Story: one concrete beat from the blurb (no spoilers)',
+          'Offer: clear CTA + soft proof',
+        ],
+        whyItFitsThisBook: `"${book.title}" has a strong premise line that works as a hook; the ${genre} tone supports short story beats before the offer.`,
+      },
       headlines: headlineBases.map((text, i) => ({
         text,
         trigger: triggers[i % triggers.length],
@@ -407,7 +398,7 @@ export const localAiService = {
       })),
       bodies: bodyBases.map((text, i) => ({
         text,
-        emotion: ['wonder', 'urgency', 'warmth', 'tension', 'curiosity', 'belonging', 'excitement', 'resolve'][i % 8],
+        emotion: ['wonder', 'urgency', 'warmth', 'tension', 'curiosity'][i % 5],
         painPoint: i % 2 === 0 ? 'TBR fatigue / same-old genre' : 'Wanting a story that sticks',
       })),
       ctas: ctaBases,
@@ -415,42 +406,42 @@ export const localAiService = {
         {
           type: 'hero',
           title: 'Cover-forward lifestyle',
-          description: `Book cover of "${book.title}" held in soft natural light; shallow depth of field; reader hands only.`,
+          description: `Book cover of "${book.title}" in soft natural light; shallow depth of field.`,
           colorPalette: 'Warm neutrals + genre accent',
           mood: 'Inviting, premium',
-          imagePrompt: `Professional book marketing photo, "${book.title}" cover clear and readable, soft window light, minimal background, high-end product photography --ar 4:5`,
+          imagePrompt: `Professional book marketing photo, "${book.title}" cover clear and readable, soft window light, minimal background --ar 4:5`,
         },
         {
-          type: 'hero',
-          title: 'Mood landscape',
-          description: `Atmospheric scene echoing the ${genre} tone of the book; no readable text except optional title treatment.`,
-          colorPalette: 'Genre-led cinematic grades',
-          mood: 'Immersive',
-          imagePrompt: `Cinematic ${genre} atmosphere inspired by "${book.title}", no spoilers, dramatic light, book marketing still --ar 1.91:1`,
+          type: 'story',
+          title: 'Stories frame set',
+          description: 'Vertical frames: cover → one stake line → CTA sticker.',
+          colorPalette: 'High contrast mobile',
+          mood: 'Fast',
+          imagePrompt: `Instagram Stories book promo frames for "${book.title}", bold type-safe margins --ar 9:16`,
+        },
+        {
+          type: 'pin',
+          title: 'Pinterest idea pin',
+          description: `Tall pin: cover + "${themes[0] || genre}" theme line.`,
+          colorPalette: 'Clean white + accent',
+          mood: 'Aspirational',
+          imagePrompt: `Pinterest pin layout, "${book.title}", ${genre}, elegant typography --ar 2:3`,
+        },
+        {
+          type: 'youtube',
+          title: 'Thumbnail still',
+          description: 'Face + cover + 3-word thumbnail text.',
+          colorPalette: 'High saturation',
+          mood: 'Clickable',
+          imagePrompt: `YouTube thumbnail style, book "${book.title}", readable text space --ar 16:9`,
         },
         {
           type: 'carousel',
           title: 'Promise → proof → CTA',
-          description: 'Slide 1 hook line, slide 2 blurb beat, slide 3 cover + CTA.',
-          colorPalette: 'Consistent brand colors across slides',
+          description: 'Three slides: hook, blurb beat, cover + CTA.',
+          colorPalette: 'Consistent brand colors',
           mood: 'Narrative',
-          imagePrompt: `Carousel panel set for book ad, clean typography space, "${book.title}", modern marketing layout --ar 1:1`,
-        },
-        {
-          type: 'video',
-          title: '15s hook reel',
-          description: '0–3s pattern interrupt text, 3–12s cover + one line of stakes, 12–15s CTA.',
-          colorPalette: 'High contrast for mobile',
-          mood: 'Fast, scroll-stopping',
-          imagePrompt: `Storyboard frame for vertical book promo video, bold on-screen text safe margins, "${book.title}" --ar 9:16`,
-        },
-        {
-          type: 'video',
-          title: 'Testimonial-style UGC',
-          description: 'Creator-style talking head holding the book; authentic, not studio-polished.',
-          colorPalette: 'Natural / phone-cam',
-          mood: 'Trust',
-          imagePrompt: `UGC style still, person holding paperback "${book.title}", candid lighting, social ad aesthetic --ar 9:16`,
+          imagePrompt: `Carousel book ad panels for "${book.title}" --ar 1:1`,
         },
       ],
       platforms: {
@@ -461,27 +452,45 @@ export const localAiService = {
             description: `Discover "${book.title}"`,
             cta: 'Learn More',
           },
-          {
-            primaryText: bodyBases[1],
-            headline: headlineBases[2],
-            description: genre,
-            cta: 'Shop Now',
-          },
         ],
         instagram: [
           {
-            caption: `${headlineBases[1]}\n\n${bodyBases[2]}\n\n#${genre.replace(/\s+/g, '')} #BookRecommendation #TBR`,
+            caption: `${headlineBases[1]}\n\n${bodyBases[1]}\n\n#${genre.replace(/\s+/g, '')} #BookRecommendation`,
             headline: headlineBases[1],
             cta: 'Link in bio',
-            hashtags: ['BookTok', genre.replace(/\s+/g, ''), 'AmReading', 'BookRecommendation'],
+            hashtags: ['BookTok', genre.replace(/\s+/g, ''), 'AmReading'],
           },
+        ],
+        instagramStories: [
+          { frame: 1, text: book.title, visual: 'Cover close-up', stickerCta: 'poll' },
+          { frame: 2, text: headlineBases[0].slice(0, 60), visual: 'Mood still', stickerCta: 'question' },
+          { frame: 3, text: 'Tap to read', visual: 'Cover + CTA', stickerCta: 'link' },
         ],
         tiktok: [
           {
-            hook: headlineBases[4],
-            script: `HOOK: ${headlineBases[4]}\nBODY: ${blurb}\nCTA: Comment "TBR" if this is going on your list — "${book.title}"`,
+            hook: headlineBases[0],
+            script: `HOOK: ${headlineBases[0]}\nBODY: ${blurb}\nCTA: "${book.title}" — start today`,
             cta: 'Read now',
             onScreenText: book.title,
+          },
+        ],
+        google: [
+          {
+            headline1: book.title.slice(0, 30),
+            headline2: titleCase(genre).slice(0, 30),
+            headline3: 'Start reading today'.slice(0, 30),
+            description1: blurb.slice(0, 90),
+            description2: `Discover "${book.title}" — ${genre}.`.slice(0, 90),
+            path1: 'books',
+            path2: genre.replace(/\s+/g, '-').slice(0, 15),
+          },
+        ],
+        pinterest: [
+          {
+            title: `"${book.title}" — ${titleCase(genre)} for your TBR`,
+            description: blurb.slice(0, 160),
+            boardSuggestion: `${titleCase(genre)} reads`,
+            imagePrompt: `Pinterest-style vertical book pin, "${book.title}", aesthetic flat lay --ar 2:3`,
           },
         ],
         amazon: [
@@ -500,44 +509,213 @@ export const localAiService = {
           },
         ],
       },
+      amazonAdProducts: [
+        {
+          product: 'Sponsored Products',
+          objective: 'Capture high-intent category searchers',
+          targetingNotes: `Target ${genre} + close comps; exact + phrase match`,
+          sampleCopy: headlineBases[0],
+          bidGuidance: 'Start mid-range for category; raise on converting ASIN targets',
+        },
+        {
+          product: 'Sponsored Brands',
+          objective: 'Build author/brand presence above the fold',
+          targetingNotes: 'Category + competitor ASINs',
+          sampleCopy: `Discover "${book.title}"`,
+          bidGuidance: 'Protect brand terms; moderate category bids',
+        },
+        {
+          product: 'Sponsored Display',
+          objective: 'Retarget detail-page visitors',
+          targetingNotes: 'Views remarketing + similar product',
+          sampleCopy: bodyBases[1].slice(0, 100),
+          bidGuidance: 'Lower CPC; optimize for detail-page views',
+        },
+        {
+          product: 'Amazon DSP',
+          objective: 'Awareness outside Amazon for launch week',
+          targetingNotes: 'In-market book buyers; contextual lifestyle',
+          sampleCopy: headlineBases[2],
+          bidGuidance: 'CPM test budgets; frequency cap 3/day',
+        },
+        {
+          product: 'Kindle Countdown / Deal',
+          objective: 'Velocity + rank spike',
+          targetingNotes: 'Pair with email list + social burst',
+          sampleCopy: `"${book.title}" — limited deal window`,
+          bidGuidance: 'N/A — price promo; stack with SP',
+        },
+      ],
+      performanceForecasts: [
+        {
+          channel: 'Amazon SP',
+          metric: 'ACOS',
+          rangeLow: 25,
+          rangeHigh: 55,
+          unit: '%',
+          assumptions: 'Competitive category; optimized keywords after 2 weeks',
+        },
+        {
+          channel: 'Meta (FB/IG)',
+          metric: 'CTR',
+          rangeLow: 0.8,
+          rangeHigh: 2.2,
+          unit: '%',
+          assumptions: 'Creative refresh weekly; lookalikes from buyers',
+        },
+        {
+          channel: 'TikTok',
+          metric: 'Hook rate (3s)',
+          rangeLow: 20,
+          rangeHigh: 45,
+          unit: '%',
+          assumptions: 'Strong pattern-interrupt opening tied to book stakes',
+        },
+        {
+          channel: 'Email',
+          metric: 'Open rate',
+          rangeLow: 35,
+          rangeHigh: 55,
+          unit: '%',
+          assumptions: 'Warm list; specific subject with book title',
+        },
+        {
+          channel: 'Google RSA',
+          metric: 'CTR',
+          rangeLow: 2,
+          rangeHigh: 6,
+          unit: '%',
+          assumptions: 'Exact/phrase on title + genre intent',
+        },
+      ],
       abTests: [
         {
           name: 'Headline angle',
           control: headlineBases[0],
           variantA: headlineBases[3],
-          variantB: headlineBases[5],
+          variantB: headlineBases[4],
           hypothesis: 'Curiosity beats benefit for cold traffic in this genre.',
         },
         {
           name: 'CTA style',
           control: 'Get the book',
           variantA: 'Start reading',
-          variantB: 'See the sample',
+          variantB: 'Read the sample',
           hypothesis: 'Lower-commitment CTAs lift click-through on cold audiences.',
         },
       ],
     };
   },
 
-  async generateTikTokScript(book: Book) {
+  /** Structured TikTok / Stories script (matches Groq shape). */
+  async generateTikTokScript(book: Book, _personaNotes?: string) {
     const seed = seedFrom(book.id, 'tiktok');
-    const { nounPhrases, protagonist, adjectives } = analyzeBook(book);
-    const hooks = [
-      `POV: you just found your next obsession — "${book.title}"`,
-      protagonist
-        ? `Tell me why nobody warned me about what ${protagonist} goes through in this book`
-        : `Tell me why nobody warned me about this ${genreLabel(book.genre)} book`,
-      `Books that will ruin you: "${book.title}" edition`,
-    ];
-    const tone = adjectives[0] ? `Keep the vibe ${adjectives[0]} throughout — that's the book's own energy.` : '';
+    const { nounPhrases, protagonist, adjectives, hookSentence } = analyzeBook(book);
+    const genre = genreLabel(book.genre);
 
-    return [
-      `HOOK (0-3s): ${pick(hooks, seed)}`,
-      ``,
-      `BODY (4-25s): Quick, punchy summary — mention ${nounPhrases.slice(0, 2).join(' and ') || 'the premise'} without spoilers. Hold up the book/cover on screen. Use on-screen text for the key trope callouts. ${tone}`,
-      ``,
-      `CTA (26-30s): "Link in bio / comments if you want the vibes." Text overlay: "${book.title} — out now."`,
-    ].join('\n');
+    const hookVariants = [
+      protagonist
+        ? `POV: you just met ${protagonist} in "${book.title}"`
+        : `Stop scrolling if you read ${genre}`,
+      `"${book.title}" in one breath`,
+      hookSentence.slice(0, 90),
+      `The ${genre} premise nobody warned you about`,
+      `Why readers finish "${book.title}" faster than they planned`,
+    ];
+
+    return {
+      durationSec: 35,
+      hook: pick(hookVariants, seed),
+      hookVariants,
+      beats: [
+        {
+          atSec: 0,
+          spoken: pick(hookVariants, seed),
+          onScreenText: book.title,
+          visual: 'Cover close-up',
+        },
+        {
+          atSec: 5,
+          spoken: `It's about ${nounPhrases.slice(0, 2).join(' and ') || genre} — without the usual filler.`,
+          onScreenText: nounPhrases[0] || genre,
+          visual: 'Mood B-roll matching tone',
+        },
+        {
+          atSec: 15,
+          spoken: hookSentence.slice(0, 140),
+          onScreenText: adjectives[0] ? titleCase(adjectives[0]) : 'No spoilers',
+          visual: 'Text overlay + soft zoom on cover',
+        },
+        {
+          atSec: 28,
+          spoken: `If that lands, start "${book.title}" today.`,
+          onScreenText: 'Link in bio',
+          visual: 'Cover + CTA',
+        },
+      ],
+      cta: `Read "${book.title}"`,
+      sounds: ['trending emotional underscore'],
+      hashtags: ['#booktok', `#${book.genre.toLowerCase()}`, '#tbr'],
+      storiesFrames: [
+        { frame: 1, text: book.title, visual: 'Cover', sticker: 'poll' },
+        { frame: 2, text: hookSentence.slice(0, 60), visual: 'Quote card', sticker: 'question' },
+        { frame: 3, text: 'Tap for more', visual: 'Cover', sticker: 'link' },
+      ],
+    };
+  },
+
+  /** Full YouTube / BookTube script (matches Groq shape). */
+  async generateYoutubeScript(book: Book, _personaNotes?: string) {
+    const seed = seedFrom(book.id, 'youtube');
+    const { hookSentence, protagonist, nounPhrases } = analyzeBook(book);
+    const genre = genreLabel(book.genre);
+
+    const titleVariants = [
+      `Why "${book.title}" belongs on your TBR`,
+      protagonist ? `Who is ${protagonist}? (${book.title})` : `Inside ${genre}: ${book.title}`,
+      `I finished "${book.title}" in one weekend`,
+      `Should you read "${book.title}"?`,
+      `The stakes in "${book.title}" (no spoilers)`,
+    ];
+
+    return {
+      title: pick(titleVariants, seed),
+      titleVariants,
+      thumbnailText: [book.title, 'No spoilers', 'TBR pick', titleCase(genre), 'Start here'],
+      hook: hookSentence.slice(0, 160),
+      sections: [
+        {
+          name: 'Hook',
+          startSec: 0,
+          spoken: hookSentence,
+          broll: 'Cover + title card',
+        },
+        {
+          name: 'Setup',
+          startSec: 25,
+          spoken: book.description.slice(0, 280) || `A ${genre} story built around ${nounPhrases[0] || 'its core premise'}.`,
+          broll: 'Genre mood footage',
+        },
+        {
+          name: 'Why it matters',
+          startSec: 90,
+          spoken: protagonist
+            ? `What makes ${protagonist}'s path in "${book.title}" worth your time.`
+            : `What makes "${book.title}" worth a slot on a crowded ${genre} TBR.`,
+          broll: 'Reading desk / notes',
+        },
+        {
+          name: 'CTA',
+          startSec: 150,
+          spoken: `If that resonates, start "${book.title}" this week and tell me your favorite non-spoiler moment.`,
+          broll: 'Cover end card',
+        },
+      ],
+      cta: `Grab "${book.title}" — link in description.`,
+      description: `${book.title} — ${genre}. ${book.description.slice(0, 220)}`,
+      tags: [book.title, genre, 'booktube', 'book review', 'tbr'],
+      endScreen: 'Subscribe for more book-specific breakdowns',
+    };
   },
 
   async generateEmailCopy(book: Book) {
@@ -587,8 +765,10 @@ export const localAiService = {
 
     const angleBank = [
       `what drew me to write a ${genre} story in the first place`,
-      `the research/craft choices behind ${nounPhrases[0] ?? 'the book\'s central premise'}`,
-      protagonist ? `why ${protagonist}'s arc turned out differently than I originally planned` : `how the story's central conflict evolved during drafting`,
+      `the research/craft choices behind ${nounPhrases[0] ?? "the book's central premise"}`,
+      protagonist
+        ? `why ${protagonist}'s arc turned out differently than I originally planned`
+        : `how the story's central conflict evolved during drafting`,
       `what I'd tell someone starting their first ${genre} manuscript`,
     ];
     const talkingPoints = pickMany(angleBank, seed, 3);
@@ -649,7 +829,7 @@ export const localAiService = {
 
   async generateCalendar(book: Book, days: number) {
     const seed = seedFrom(book.id, 'calendar');
-    const platforms = ['INSTAGRAM', 'TIKTOK', 'FACEBOOK', 'EMAIL', 'REDDIT', 'AMAZON'];
+    const platforms = ['INSTAGRAM', 'TIKTOK', 'FACEBOOK', 'EMAIL', 'REDDIT', 'AMAZON', 'YOUTUBE', 'PINTEREST'];
     const actionsByPlatform: Record<string, string[]> = {
       INSTAGRAM: ['Post cover reveal carousel', 'Share a quote graphic', 'Post reels teaser'],
       TIKTOK: ['Post BookTok hook video', 'Post trope callout video', 'Duet/react to a reader review'],
@@ -657,6 +837,8 @@ export const localAiService = {
       EMAIL: ['Send launch announcement', 'Send first-chapter excerpt', 'Send reader Q&A recap'],
       REDDIT: ['Post in relevant subreddit AMA-style thread', 'Share in recommendation thread respectfully'],
       AMAZON: ['Refresh keyword-optimized listing copy', 'Request/encourage early reviews'],
+      YOUTUBE: ['Publish BookTube review-style video', 'Upload trailer-style teaser'],
+      PINTEREST: ['Pin cover + blurb graphic', 'Create idea pin for TBR list'],
     };
 
     const step = Math.max(1, Math.floor(days / 10));

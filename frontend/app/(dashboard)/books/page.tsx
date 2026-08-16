@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { BookList } from "./components/BookList";
 import { BookFilters } from "./components/BookFilters";
-import { apiGetWithMeta } from "@/lib/api/client";
+import { api, apiGetWithMeta, ApiError } from "@/lib/api/client";
 import type { Book } from "@/types";
 
 const PAGE_SIZE = 20;
@@ -24,6 +24,7 @@ export default function BooksPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const requestIdRef = useRef(0);
+  
 
   // Reset to page 1 whenever the filters change, and debounce the search
   // input so we're not hitting the API on every keystroke.
@@ -70,7 +71,31 @@ export default function BooksPage() {
     }
   }
 
+
+  async function handleDelete(book: Book) {
+    if (
+      !confirm(
+        `Delete "${book.title}" and all related audits/creatives? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setDeletingId(book.id);
+    setError("");
+    try {
+      await api.delete(`/books/${book.id}`);
+      setBooks((prev) => prev.filter((b) => b.id !== book.id));
+      setTotal((t) => Math.max(0, t - 1));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Delete failed");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   const hasMore = books.length < total;
+
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 animate-fade-in">
@@ -133,7 +158,7 @@ export default function BooksPage() {
 
       {!loading && books.length > 0 && (
         <>
-          <BookList books={books} />
+          <BookList books={books} onDelete={handleDelete} deletingId={deletingId} />
           {hasMore && (
             <div className="flex justify-center pt-2">
               <Button variant="outline" onClick={loadMore} disabled={loadingMore} className="gap-2">

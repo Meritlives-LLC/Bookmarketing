@@ -8,10 +8,6 @@ import { logger } from '../utils/logger';
 import { GenerateCreativeInput } from '../types/creative.types';
 import { paginate, buildPaginationMeta } from '../utils/formatter';
 
-/**
- * Pull real persona / sample-reader notes from the latest completed audit.
- * Used to ground Ad Suite copy in scraped audience data (no generic archetypes).
- */
 async function loadPersonaNotesForBook(
   bookId: string,
   segment?: ReaderSegment | null
@@ -35,24 +31,34 @@ async function loadPersonaNotesForBook(
       data?: Record<string, unknown> | null;
     }>;
 
-    const preferred = segment
-      ? insights.filter((i) => i.segment === segment)
-      : insights;
+    const preferred = segment ? insights.filter((i) => i.segment === segment) : insights;
     const pool = preferred.length ? preferred : insights;
 
     const lines: string[] = [];
     for (const ins of pool.slice(0, 4)) {
       if (ins.summary) lines.push(`Segment ${ins.segment}: ${ins.summary}`);
       const data = (ins.data || {}) as Record<string, unknown>;
-      const readers = Array.isArray(data.sampleReaders) ? data.sampleReaders : [];
-      const personas = Array.isArray(data.personas) ? data.personas : [];
-      for (const r of readers.slice(0, 3) as Array<{ name?: string; quote?: string; source?: string }>) {
-        if (r.quote) {
-          lines.push(
-            `Reader (${r.source || 'scrape'}) ${r.name || ''}: "${String(r.quote).slice(0, 160)}"`
-          );
-        }
+
+      const readers = Array.isArray(data.readers)
+        ? data.readers
+        : Array.isArray(data.sampleReaders)
+          ? data.sampleReaders
+          : [];
+
+      for (const r of readers.slice(0, 4) as Array<{
+        label?: string;
+        name?: string;
+        whySelected?: string;
+        likelyToBuyBecause?: string;
+        habits?: string;
+        quote?: string;
+      }>) {
+        const name = r.label || r.name || 'Reader';
+        const detail = r.quote || r.whySelected || r.likelyToBuyBecause || r.habits;
+        if (detail) lines.push(`Selected reader ${name}: ${String(detail).slice(0, 200)}`);
       }
+
+      const personas = Array.isArray(data.personas) ? data.personas : [];
       for (const p of personas.slice(0, 3) as Array<{
         label?: string;
         motivation?: string;
@@ -64,7 +70,7 @@ async function loadPersonaNotesForBook(
     }
     return lines.length ? lines.join('\n') : undefined;
   } catch (err) {
-    logger.warn('Could not load persona notes for ad suite', {
+    logger.warn('Could not load persona notes for creative', {
       bookId,
       error: (err as Error).message,
     });
@@ -86,7 +92,6 @@ export const creativeService = {
       content: {},
     });
 
-    // fire-and-forget generation; in production this goes through the queue
     this.generate(creative.id).catch((error) =>
       logger.error('Creative generation failed', { creativeId: creative.id, error })
     );
@@ -118,9 +123,17 @@ export const creativeService = {
           break;
         }
         case CreativeType.TIKTOK_VIDEO: {
-          const script = await aiService.generateTikTokScript(book);
-          content = { script };
-          title = `TikTok script — ${book.title}`;
+          const personaNotes = await loadPersonaNotesForBook(book.id, creative.segment);
+          const script = await aiService.generateTikTokScript(book, personaNotes);
+          content = typeof script === 'string' ? { script } : (script as Record<string, unknown>);
+          title = `TikTok / Stories script — ${book.title}`;
+          break;
+        }
+        case CreativeType.YOUTUBE_SCRIPT: {
+          const personaNotes = await loadPersonaNotesForBook(book.id, creative.segment);
+          const yt = await aiService.generateYoutubeScript(book, personaNotes);
+          content = yt as Record<string, unknown>;
+          title = (yt as { title?: string }).title || `YouTube script — ${book.title}`;
           break;
         }
         case CreativeType.EMAIL_COPY: {
