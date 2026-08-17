@@ -770,6 +770,12 @@ enum CameraAngle {
   DUTCH_ANGLE
   OVERHEAD
   GROUND_LEVEL
+  OVER_SHOULDER
+  TOP_DOWN
+  BOTTOM_UP
+  POV
+  PROFILE
+  THREE_QUARTER
 }
 
 enum CameraFraming {
@@ -794,12 +800,17 @@ enum FocusMode {
   FOLLOW_FOCUS
   DEEP_FOCUS
   SOFT_FOCUS
+  SHALLOW_FOCUS
+  AUTO_FOCUS
+  SELECTIVE_FOCUS
 }
 
 enum DepthOfField {
   SHALLOW
   MEDIUM
   DEEP
+  MODERATE
+  EXTREME_SHALLOW
 }
 
 enum MovementPurpose {
@@ -839,6 +850,7 @@ model VideoShot {
   framing              CameraFraming?
   composition          String?
   focusMode            FocusMode?
+  focusTarget          String?
   depthOfField         DepthOfField?
   movementPurpose      MovementPurpose?
   /// Legacy free-text movement summary
@@ -848,6 +860,8 @@ model VideoShot {
   startOffsetSec       Float?
   visualPrompt         String?
   negativePrompt       String?
+  /// Advisory continuity warnings (never blocks generation)
+  cameraContinuityWarnings Json?
   status               VideoShotStatus   @default(PENDING)
   videoUrl             String?
   providerGenerationId String?

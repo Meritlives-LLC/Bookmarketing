@@ -6,6 +6,7 @@ import { AppError } from '../utils/helpers';
 import { videoProjectRepository } from '../repositories/video-project.repository';
 import { videoSceneRepository } from '../repositories/video-scene.repository';
 import { chunkTextHierarchical, splitDurationIntoShots } from '../utils/text-chunking';
+import { reasonCameraPlan, compileShotPrompt } from '../cinematography';
 import {
   segmentChapterDeterministic,
   repairCoverageOrFallback,
@@ -27,6 +28,17 @@ const SceneListSchema = z.object({
       lighting: z.string().nullable().optional(), durationSec: z.number().nullable().optional(),
       startOffsetSec: z.number().nullable().optional(), visualPrompt: z.string().nullable().optional(),
       negativePrompt: z.string().nullable().optional(),
+      // Structured cinematic camera (preferred over free-text)
+      cameraMovement: z.string().nullable().optional(),
+      cameraSpeed: z.string().nullable().optional(),
+      cameraRig: z.string().nullable().optional(),
+      cameraAngle: z.string().nullable().optional(),
+      framing: z.string().nullable().optional(),
+      focalLength: z.union([z.string(), z.number()]).nullable().optional(),
+      focusMode: z.string().nullable().optional(),
+      depthOfField: z.string().nullable().optional(),
+      movementPurpose: z.string().nullable().optional(),
+      focusTarget: z.string().nullable().optional(),
     })).optional(),
   })),
 });
@@ -114,7 +126,7 @@ async function callScenePlan(chapterText: string, chapterNumber: number, title: 
       body: JSON.stringify({
         model: config.ai.groq.model || 'openai/gpt-oss-120b', temperature: 0.15, response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: 'Segment this text into cinematic scenes+shots. sourceStart/sourceEnd are 0-based offsets RELATIVE TO THIS CHUNK covering the ENTIRE chunk with no gaps/overlaps. Do NOT rewrite story. Return JSON {scenes:[...]}.' },
+          { role: 'system', content: 'Segment this text into cinematic scenes+shots. sourceStart/sourceEnd are 0-based offsets RELATIVE TO THIS CHUNK covering the ENTIRE chunk with no gaps/overlaps. Do NOT rewrite story. For each shot include structured camera fields: cameraMovement (STATIC|PUSH_IN|PULL_OUT|TRACKING|FOLLOW|PAN_LEFT|PAN_RIGHT|DOLLY_IN|HANDHELD|CRANE_UP|...), cameraSpeed (VERY_SLOW|SLOW|MEDIUM|FAST|VERY_FAST), cameraRig, cameraAngle, framing, focalLength, focusMode, depthOfField, movementPurpose. Prefer STATIC when motion is not motivated. Consider continuity between consecutive shots. Return JSON {scenes:[...]}.' },
           { role: 'user', content: `Chapter ${chapterNumber}${title ? `: ${title}` : ''} chunk ${chunk.index + 1}/${chunks.length}\nStyle: ${filmStyle}\nCharacters: ${characters.join(', ') || 'none'}\nLocations: ${locations.join(', ') || 'none'}\nChunk length: ${chunk.text.length}\n\n${chunk.text}` },
         ],
       }),
@@ -223,15 +235,71 @@ export const scenePlannerService = {
             globalOff += d;
           }
         }
-        for (const shot of expanded) {
+        const totalShots = expanded.length;
+        for (let si = 0; si < expanded.length; si++) {
+          const shot = expanded[si];
+          // Prefer AI structured camera when present; otherwise reason from narrative context
+          let camPlan = reasonCameraPlan({
+            shotNumber: shot.shotNumber ?? si + 1,
+            totalShotsInScene: totalShots,
+            shotType: shot.shotType,
+            action: shot.action ?? proposal.action,
+            emotionalBeat: proposal.emotionalBeat,
+            locationKind: 'unknown',
+            locationScale: 'unknown',
+            intensity: 'medium',
+            previous: si > 0 ? undefined : undefined,
+          });
+          const aiMove = (shot as any).cameraMovement;
+          if (aiMove) {
+            camPlan = {
+              ...camPlan,
+              cameraMovement: aiMove as any,
+              cameraSpeed: ((shot as any).cameraSpeed || camPlan.cameraSpeed) as any,
+              cameraRig: ((shot as any).cameraRig || camPlan.cameraRig) as any,
+              cameraAngle: ((shot as any).cameraAngle || camPlan.cameraAngle) as any,
+              framing: ((shot as any).framing || camPlan.framing) as any,
+              lens: String((shot as any).focalLength || (shot as any).lens || camPlan.lens),
+              focalLength: String((shot as any).focalLength || (shot as any).lens || camPlan.focalLength),
+              focusMode: ((shot as any).focusMode || camPlan.focusMode) as any,
+              depthOfField: ((shot as any).depthOfField || camPlan.depthOfField) as any,
+              movementPurpose: ((shot as any).movementPurpose || camPlan.movementPurpose) as any,
+              cameraSummary: `${(shot as any).cameraRig || camPlan.cameraRig} ${aiMove}`.toLowerCase().replace(/_/g, ' '),
+              movementSummary: `${aiMove} @ ${(shot as any).cameraSpeed || camPlan.cameraSpeed}`,
+            };
+          }
+          const compiled = compileShotPrompt({
+            baseVisual: shot.visualPrompt ?? visualPrompt ?? sourceText.slice(0, 400),
+            camera: camPlan,
+            filmStyle,
+            negativePrompt: shot.negativePrompt ?? null,
+          });
           await prisma.videoShot.create({
             data: {
-              sceneId: scene.id, shotNumber: shot.shotNumber, shotType: shot.shotType ?? null,
+              sceneId: scene.id, shotNumber: shot.shotNumber, shotType: shot.shotType ?? camPlan.framing,
               sourceTextSegment: shot.sourceTextSegment ?? sourceText, action: shot.action ?? null,
-              camera: shot.camera ?? null, lens: shot.lens ?? null, movement: shot.movement ?? null,
+              camera: shot.camera ?? null, lens: shot.lens ?? shot.focalLength ?? null,
+              focalLength: (shot as any).focalLength ?? shot.lens ?? null,
+              movement: shot.movement ?? null,
+              cameraMovement: (shot as any).cameraMovement ?? null,
+              cameraSpeed: (shot as any).cameraSpeed ?? null,
+              cameraDirection: (shot as any).cameraDirection ?? null,
+              cameraAngle: (shot as any).cameraAngle ?? null,
+              cameraRig: (shot as any).cameraRig ?? null,
+              framing: (shot as any).framing ?? null,
+              focusMode: (shot as any).focusMode ?? null,
+              depthOfField: (shot as any).depthOfField ?? null,
+              movementPurpose: (shot as any).movementPurpose ?? null,
               composition: shot.composition ?? null, lighting: shot.lighting ?? null,
               durationSec: shot.durationSec ?? estimatedDurationSec, startOffsetSec: shot.startOffsetSec ?? 0,
-              visualPrompt: shot.visualPrompt ?? visualPrompt, negativePrompt: shot.negativePrompt ?? null, status: 'PROMPT_READY',
+              visualPrompt: compiled.prompt, negativePrompt: compiled.negativePrompt, status: 'PROMPT_READY',
+              camera: camPlan.cameraSummary, movement: camPlan.movementSummary,
+              cameraMovement: camPlan.cameraMovement, cameraSpeed: camPlan.cameraSpeed,
+              cameraAngle: camPlan.cameraAngle, cameraRig: camPlan.cameraRig,
+              lens: camPlan.lens, focalLength: camPlan.focalLength, framing: camPlan.framing,
+              composition: camPlan.composition, focusMode: camPlan.focusMode,
+              depthOfField: camPlan.depthOfField, movementPurpose: camPlan.movementPurpose,
+              focusTarget: (shot as any).focusTarget ?? null,
             },
           });
         }

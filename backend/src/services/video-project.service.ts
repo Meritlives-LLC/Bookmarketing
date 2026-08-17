@@ -12,6 +12,8 @@ import {
   enqueueGenerateSubtitles, enqueueAssembleFilm,
 } from '../queues/book-video.queue';
 import { getVideoProvider } from './video-provider.service';
+import { compileShotPrompt, reasonCameraPlan, validateCameraPlan, normalizeShotCamera, validateCameraContinuity, suggestContinuityFix, type ShotCameraPlan } from '../cinematography';
+import { shotPromptCompilerService } from './shot-prompt-compiler.service';
 import { storageService } from './storage.service';
 
 const STAGE_LABELS: Record<string, string> = {
@@ -162,19 +164,296 @@ export const videoProjectService = {
       cameraPlan: data.cameraPlan ?? scene.cameraPlan,
     });
   },
-  async updateShotPrompt(userId: string, shotId: string, data: { visualPrompt?: string; camera?: string; shotType?: string; durationSec?: number }) {
-    const shot = await prisma.videoShot.findFirst({ where: { id: shotId, scene: { videoProject: { book: { userId } } } } });
+  async updateShotPrompt(userId: string, shotId: string, data: Record<string, unknown>) {
+    const shot = await prisma.videoShot.findFirst({
+      where: { id: shotId, scene: { videoProject: { book: { userId } } } },
+      include: { scene: { include: { videoProject: true } } },
+    });
     if (!shot) throw AppError.notFound('Shot not found');
-    return prisma.videoShot.update({
-      where: { id: shotId },
-      data: {
-        visualPrompt: data.visualPrompt ?? shot.visualPrompt,
-        camera: data.camera ?? shot.camera,
-        shotType: data.shotType ?? shot.shotType,
-        durationSec: data.durationSec ?? shot.durationSec,
+
+    const patch: Record<string, unknown> = {};
+    const allowed = [
+      'visualPrompt', 'camera', 'shotType', 'durationSec', 'cameraMovement', 'cameraSpeed',
+      'cameraDirection', 'cameraAngle', 'cameraRig', 'lens', 'focalLength', 'framing',
+      'composition', 'focusMode', 'depthOfField', 'movementPurpose', 'movement', 'lighting',
+      'negativePrompt',
+    ];
+    for (const f of allowed) {
+      if (data[f] !== undefined) patch[f] = data[f];
+    }
+
+    const cameraKeys = [
+      'cameraMovement', 'cameraSpeed', 'cameraAngle', 'cameraRig', 'lens', 'focalLength',
+      'framing', 'movementPurpose', 'depthOfField', 'focusMode', 'composition',
+    ];
+    const cameraTouched = cameraKeys.some((k) => data[k] !== undefined);
+    if (data.recompilePrompt || (cameraTouched && data.visualPrompt === undefined)) {
+      const plan: ShotCameraPlan = {
+        cameraMovement: (data.cameraMovement as any) || (shot as any).cameraMovement || 'STATIC',
+        cameraSpeed: (data.cameraSpeed as any) || (shot as any).cameraSpeed || 'SLOW',
+        cameraDirection: (data.cameraDirection as string) ?? (shot as any).cameraDirection,
+        cameraAngle: (data.cameraAngle as any) || (shot as any).cameraAngle || 'EYE_LEVEL',
+        cameraRig: (data.cameraRig as any) || (shot as any).cameraRig || 'STATIC_TRIPOD',
+        lens: (data.lens as string) || shot.lens || '50mm',
+        focalLength: (data.focalLength as string) || (shot as any).focalLength || shot.lens || '50mm',
+        framing: (data.framing as any) || (shot as any).framing || 'MEDIUM',
+        composition: (data.composition as string) || shot.composition || 'rule-of-thirds',
+        focusMode: (data.focusMode as any) || (shot as any).focusMode || 'FIXED',
+        depthOfField: (data.depthOfField as any) || (shot as any).depthOfField || 'MEDIUM',
+        movementPurpose: (data.movementPurpose as any) || (shot as any).movementPurpose || 'FOLLOW_CHARACTER',
+        cameraSummary: '',
+        movementSummary: '',
+      };
+      plan.cameraSummary = `${plan.cameraRig} ${plan.cameraMovement}`.toLowerCase().replace(/_/g, ' ');
+      plan.movementSummary = `${plan.cameraMovement} @ ${plan.cameraSpeed}`;
+      const validation = validateCameraPlan(plan);
+      const finalPlan = (!validation.ok && validation.adjusted) ? validation.adjusted : plan;
+      const base = (shot.sourceTextSegment || shot.scene.sourceText || '').slice(0, 500);
+      const compiled = compileShotPrompt({
+        baseVisual: base,
+        camera: finalPlan,
+        filmStyle: (shot.scene.videoProject as any).visualStyle || undefined,
+        negativePrompt: shot.negativePrompt,
+      });
+      patch.visualPrompt = compiled.prompt;
+      patch.negativePrompt = compiled.negativePrompt;
+      patch.camera = finalPlan.cameraSummary;
+      patch.movement = finalPlan.movementSummary;
+      patch.cameraMovement = finalPlan.cameraMovement;
+      patch.cameraSpeed = finalPlan.cameraSpeed;
+      patch.cameraAngle = finalPlan.cameraAngle;
+      patch.cameraRig = finalPlan.cameraRig;
+      patch.lens = finalPlan.lens;
+      patch.focalLength = finalPlan.focalLength;
+      patch.framing = finalPlan.framing;
+      patch.focusMode = finalPlan.focusMode;
+      patch.depthOfField = finalPlan.depthOfField;
+      patch.movementPurpose = finalPlan.movementPurpose;
+      patch.composition = finalPlan.composition;
+    }
+
+    return prisma.videoShot.update({ where: { id: shotId }, data: patch as any });
+  },
+  /**
+   * AI-generate structured camera for one shot (does not regenerate video).
+   * Manual overrides remain the source of truth after user edits.
+   */
+  /**
+   * Soft-fix camera params toward previous shot (camera fields only).
+   * Does not change source text, characters, locations, or story.
+   * Does not auto-regenerate video.
+   */
+  async fixCameraContinuity(userId: string, shotId: string) {
+    const shot = await prisma.videoShot.findFirst({
+      where: { id: shotId, scene: { videoProject: { book: { userId } } } },
+      include: { scene: true },
+    });
+    if (!shot) throw AppError.notFound('Shot not found');
+    const siblings = await prisma.videoShot.findMany({
+      where: { sceneId: shot.sceneId },
+      orderBy: { shotNumber: 'asc' },
+    });
+    const idx = siblings.findIndex((s) => s.id === shotId);
+    if (idx <= 0) {
+      return { shot, message: 'First shot in scene — no previous shot to align with' };
+    }
+    const prev = siblings[idx - 1];
+    const fixed = suggestContinuityFix(
+      {
+        camera: prev.camera,
+        movement: prev.movement,
+        lens: prev.lens,
+        cameraMovement: prev.cameraMovement as any,
+        cameraSpeed: prev.cameraSpeed as any,
+        cameraDirection: prev.cameraDirection,
+        cameraAngle: prev.cameraAngle as any,
+        cameraRig: prev.cameraRig as any,
+        framing: prev.framing as any,
+        focalLength: prev.focalLength,
+        focusMode: prev.focusMode as any,
+        depthOfField: prev.depthOfField as any,
+        movementPurpose: prev.movementPurpose as any,
+      },
+      {
+        camera: shot.camera,
+        movement: shot.movement,
+        lens: shot.lens,
+        cameraMovement: shot.cameraMovement as any,
+        cameraSpeed: shot.cameraSpeed as any,
+        cameraDirection: shot.cameraDirection,
+        cameraAngle: shot.cameraAngle as any,
+        cameraRig: shot.cameraRig as any,
+        framing: shot.framing as any,
+        focalLength: shot.focalLength,
+        focusMode: shot.focusMode as any,
+        depthOfField: shot.depthOfField as any,
+        movementPurpose: shot.movementPurpose as any,
+      }
+    );
+
+    // Recompile prompt from fixed camera only
+    const { shotPromptCompilerService } = await import('./shot-prompt-compiler.service');
+    const compiled = shotPromptCompilerService.compile({
+      sourceTextSegment: shot.sourceTextSegment || shot.scene.sourceText,
+      durationSec: shot.durationSec,
+      shot: {
+        cameraMovement: fixed.cameraMovement,
+        cameraSpeed: fixed.cameraSpeed,
+        cameraAngle: fixed.cameraAngle,
+        cameraRig: fixed.cameraRig,
+        framing: fixed.framing,
+        lens: fixed.lens,
+        focalLength: fixed.focalLength,
+        focusMode: fixed.focusMode,
+        depthOfField: fixed.depthOfField,
+        movementPurpose: fixed.movementPurpose,
+        composition: fixed.composition,
       },
     });
+
+    const continuity = validateCameraContinuity(
+      {
+        cameraMovement: prev.cameraMovement as any,
+        cameraSpeed: prev.cameraSpeed as any,
+        cameraRig: prev.cameraRig as any,
+        framing: prev.framing as any,
+        focalLength: prev.focalLength,
+        lens: prev.lens,
+        movementPurpose: prev.movementPurpose as any,
+      },
+      {
+        cameraMovement: fixed.cameraMovement,
+        cameraSpeed: fixed.cameraSpeed,
+        cameraRig: fixed.cameraRig,
+        framing: fixed.framing,
+        focalLength: fixed.focalLength,
+        lens: fixed.lens,
+        movementPurpose: fixed.movementPurpose,
+      }
+    );
+
+    const updated = await prisma.videoShot.update({
+      where: { id: shotId },
+      data: {
+        cameraMovement: fixed.cameraMovement,
+        cameraSpeed: fixed.cameraSpeed,
+        cameraAngle: fixed.cameraAngle,
+        cameraRig: fixed.cameraRig,
+        lens: fixed.lens,
+        focalLength: fixed.focalLength,
+        framing: fixed.framing,
+        composition: fixed.composition,
+        focusMode: fixed.focusMode,
+        depthOfField: fixed.depthOfField,
+        movementPurpose: fixed.movementPurpose,
+        camera: fixed.cameraSummary,
+        movement: fixed.movementSummary,
+        visualPrompt: compiled.prompt,
+        negativePrompt: compiled.negativePrompt,
+        cameraContinuityWarnings: {
+          valid: continuity.valid,
+          severity: continuity.severity,
+          score: continuity.score,
+          issues: continuity.issues,
+          suggestions: continuity.suggestions,
+          fixedAt: new Date().toISOString(),
+        } as any,
+      },
+    });
+    return { shot: updated, continuity };
   },
+
+  async generateCameraForShot(userId: string, shotId: string) {
+    const shot = await prisma.videoShot.findFirst({
+      where: { id: shotId, scene: { videoProject: { book: { userId } } } },
+      include: {
+        scene: {
+          include: {
+            videoProject: { include: { characters: true, locations: true } },
+          },
+        },
+      },
+    });
+    if (!shot) throw AppError.notFound('Shot not found');
+    const scene = shot.scene;
+    const siblings = await prisma.videoShot.findMany({
+      where: { sceneId: scene.id },
+      orderBy: { shotNumber: 'asc' },
+    });
+    const idx = siblings.findIndex((s) => s.id === shotId);
+    const prev = idx > 0 ? siblings[idx - 1] : null;
+    const previousPlan = prev
+      ? normalizeShotCamera({
+          camera: prev.camera,
+          movement: prev.movement,
+          lens: prev.lens,
+          cameraMovement: prev.cameraMovement as any,
+          cameraSpeed: prev.cameraSpeed as any,
+          cameraAngle: prev.cameraAngle as any,
+          cameraRig: prev.cameraRig as any,
+          framing: prev.framing as any,
+          focalLength: prev.focalLength,
+          focusMode: prev.focusMode as any,
+          depthOfField: prev.depthOfField as any,
+          movementPurpose: prev.movementPurpose as any,
+        })
+      : null;
+
+    const plan = reasonCameraPlan({
+      shotNumber: shot.shotNumber,
+      totalShotsInScene: siblings.length,
+      shotType: shot.shotType,
+      action: shot.action || scene.action,
+      emotionalBeat: scene.emotionalBeat,
+      locationKind: 'unknown',
+      locationScale: 'unknown',
+      intensity: 'medium',
+      previous: previousPlan,
+    });
+
+    const compiled = shotPromptCompilerService.compile({
+      sourceTextSegment: shot.sourceTextSegment || scene.sourceText,
+      filmStyle: scene.videoProject.visualStyle || undefined,
+      durationSec: shot.durationSec,
+      shot: {
+        ...plan,
+        cameraMovement: plan.cameraMovement,
+        cameraSpeed: plan.cameraSpeed,
+        cameraAngle: plan.cameraAngle,
+        cameraRig: plan.cameraRig,
+        framing: plan.framing,
+        lens: plan.lens,
+        focalLength: plan.focalLength,
+        focusMode: plan.focusMode,
+        depthOfField: plan.depthOfField,
+        movementPurpose: plan.movementPurpose,
+      },
+    });
+
+    const updated = await prisma.videoShot.update({
+      where: { id: shotId },
+      data: {
+        cameraMovement: plan.cameraMovement,
+        cameraSpeed: plan.cameraSpeed,
+        cameraAngle: plan.cameraAngle,
+        cameraRig: plan.cameraRig,
+        lens: plan.lens,
+        focalLength: plan.focalLength,
+        framing: plan.framing,
+        composition: plan.composition,
+        focusMode: plan.focusMode,
+        depthOfField: plan.depthOfField,
+        movementPurpose: plan.movementPurpose,
+        camera: plan.cameraSummary,
+        movement: plan.movementSummary,
+        visualPrompt: compiled.prompt,
+        negativePrompt: compiled.negativePrompt,
+        // Keep status; do not auto-regenerate video
+      },
+    });
+    return { shot: updated, warnings: compiled.warnings };
+  },
+
   async updateSubtitleSettings(userId: string, projectId: string, data: { subtitleMode?: string; subtitleStyle?: string; subtitleConfig?: Record<string, unknown>; subtitleEnabled?: boolean }) {
     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
     if (!project) throw AppError.notFound('Video project not found');
@@ -342,25 +621,133 @@ export const videoProjectService = {
       refLoc?.referenceImageUrl,
     ].filter(Boolean) as string[];
 
-    let prompt = shot.visualPrompt || scene.visualPrompt || `Cinematic shot: ${(shot.sourceTextSegment || scene.sourceText).slice(0, 400)}`;
-    for (const c of refChars) {
-      if (c.continuityNotes || c.physicalAppearance) {
-        prompt += `. Character continuity ${c.name}: ${c.physicalAppearance || ''} ${c.clothing || ''} ${(c.continuityNotes || '').slice(0, 100)}`;
+    const compiled = shotPromptCompilerService.compile({
+      sourceTextSegment: shot.sourceTextSegment || scene.sourceText,
+      visualPrompt: shot.visualPrompt,
+      negativePrompt: shot.negativePrompt || scene.negativePrompt,
+      filmStyle: project.visualStyle || undefined,
+      characters: refChars.map((c) => ({
+        name: c.name,
+        physicalAppearance: c.physicalAppearance,
+        clothing: c.clothing,
+        continuityNotes: c.continuityNotes,
+        referenceImageUrl: c.referenceImageUrl,
+      })),
+      location: refLoc
+        ? {
+            name: refLoc.name,
+            visualDescription: refLoc.visualDescription,
+            environment: refLoc.environment,
+            architecture: refLoc.architecture,
+            continuityNotes: refLoc.continuityNotes,
+          }
+        : null,
+      durationSec: shot.durationSec,
+      shot: {
+        camera: shot.camera,
+        movement: shot.movement,
+        lens: shot.lens,
+        composition: shot.composition,
+        lighting: shot.lighting,
+        shotType: shot.shotType,
+        cameraMovement: shot.cameraMovement as any,
+        cameraSpeed: shot.cameraSpeed as any,
+        cameraAngle: shot.cameraAngle as any,
+        cameraRig: shot.cameraRig as any,
+        framing: shot.framing as any,
+        focalLength: shot.focalLength,
+        focusMode: shot.focusMode as any,
+        depthOfField: shot.depthOfField as any,
+        movementPurpose: shot.movementPurpose as any,
+        focusTarget: (shot as any).focusTarget,
+        cameraDirection: shot.cameraDirection,
+        durationSec: shot.durationSec,
+      },
+    });
+    // Prefer user-stored prompt if it already includes compiled cinematography
+    const prompt = shot.visualPrompt?.includes('Cinematography:')
+      ? shot.visualPrompt
+      : compiled.prompt;
+
+    // Advisory continuity check — NEVER blocks generation
+    try {
+      const siblings = await prisma.videoShot.findMany({
+        where: { sceneId: scene.id },
+        orderBy: { shotNumber: 'asc' },
+      });
+      const idx = siblings.findIndex((s) => s.id === shotId);
+      const prevShot = idx > 0 ? siblings[idx - 1] : null;
+      const continuity = validateCameraContinuity(
+        prevShot
+          ? {
+              camera: prevShot.camera,
+              movement: prevShot.movement,
+              lens: prevShot.lens,
+              cameraMovement: prevShot.cameraMovement as any,
+              cameraSpeed: prevShot.cameraSpeed as any,
+              cameraDirection: prevShot.cameraDirection,
+              cameraAngle: prevShot.cameraAngle as any,
+              cameraRig: prevShot.cameraRig as any,
+              framing: prevShot.framing as any,
+              focalLength: prevShot.focalLength,
+              focusMode: prevShot.focusMode as any,
+              depthOfField: prevShot.depthOfField as any,
+              movementPurpose: prevShot.movementPurpose as any,
+              durationSec: prevShot.durationSec,
+            }
+          : null,
+        {
+          camera: shot.camera,
+          movement: shot.movement,
+          lens: shot.lens,
+          cameraMovement: shot.cameraMovement as any,
+          cameraSpeed: shot.cameraSpeed as any,
+          cameraDirection: shot.cameraDirection,
+          cameraAngle: shot.cameraAngle as any,
+          cameraRig: shot.cameraRig as any,
+          framing: shot.framing as any,
+          focalLength: shot.focalLength,
+          focusMode: shot.focusMode as any,
+          depthOfField: shot.depthOfField as any,
+          movementPurpose: shot.movementPurpose as any,
+          durationSec: shot.durationSec,
+          action: shot.action,
+        },
+        {
+          emotionalBeat: scene.emotionalBeat,
+          locationKind: 'unknown',
+          locationScale: 'unknown',
+        }
+      );
+      await prisma.videoShot.update({
+        where: { id: shotId },
+        data: {
+          cameraContinuityWarnings: {
+            valid: continuity.valid,
+            severity: continuity.severity,
+            score: continuity.score,
+            issues: continuity.issues,
+            suggestions: continuity.suggestions,
+            checkedAt: new Date().toISOString(),
+          } as any,
+        },
+      });
+      if (continuity.issues.length) {
+        logger.info('Camera continuity advisory', {
+          shotId,
+          severity: continuity.severity,
+          score: continuity.score,
+          issueCount: continuity.issues.length,
+        });
       }
+    } catch (e) {
+      logger.warn('Continuity check failed (non-blocking)', { error: (e as Error).message });
     }
-    if (refLoc) {
-      prompt += `. Location continuity ${refLoc.name}: ${refLoc.visualDescription || refLoc.environment || ''} ${refLoc.architecture || ''}`;
-    }
-    if (shot.camera) prompt += `. Camera: ${shot.camera}`;
-    if (shot.lens) prompt += `. Lens: ${shot.lens}`;
-    if (shot.movement) prompt += `. Movement: ${shot.movement}`;
-    if (shot.lighting) prompt += `. Lighting: ${shot.lighting}`;
-    if (shot.composition) prompt += `. Composition: ${shot.composition}`;
 
     const durationSec = Math.min(8, Math.max(2, shot.durationSec || 4));
     const result = await provider.generateVideo({
       prompt,
-      negativePrompt: shot.negativePrompt || scene.negativePrompt || undefined,
+      negativePrompt: compiled.negativePrompt || shot.negativePrompt || scene.negativePrompt || undefined,
       durationSec,
       aspectRatio: aspect,
       model: project.videoModel || undefined,

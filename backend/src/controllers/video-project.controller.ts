@@ -67,6 +67,14 @@ export const videoProjectController = {
     try { res.status(202).json({ success: true, data: await videoProjectService.regenerateShot(req.user!.id, req.params.shotId) }); }
     catch (error) { next(error); }
   },
+  async generateCameraForShot(req: Request, res: Response, next: NextFunction) {
+    try { res.json({ success: true, data: await videoProjectService.generateCameraForShot(req.user!.id, req.params.shotId) }); }
+    catch (error) { next(error); }
+  },
+  async fixCameraContinuity(req: Request, res: Response, next: NextFunction) {
+    try { res.json({ success: true, data: await videoProjectService.fixCameraContinuity(req.user!.id, req.params.shotId) }); }
+    catch (error) { next(error); }
+  },
   async updateScenePrompt(req: Request, res: Response, next: NextFunction) {
     try { res.json({ success: true, data: await videoProjectService.updateScenePrompt(req.user!.id, req.params.sceneId, req.body || {}) }); }
     catch (error) { next(error); }

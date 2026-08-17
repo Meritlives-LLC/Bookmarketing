@@ -24,4 +24,6 @@ router.post('/video-scenes/:sceneId/generate', videoProjectController.regenerate
 router.patch('/video-scenes/:sceneId/prompt', videoProjectController.updateScenePrompt);
 router.patch('/video-shots/:shotId/prompt', videoProjectController.updateShotPrompt);
 router.post('/video-shots/:shotId/regenerate', videoProjectController.regenerateShot);
+router.post('/video-shots/:shotId/generate-camera', videoProjectController.generateCameraForShot);
+router.post('/video-shots/:shotId/fix-continuity', videoProjectController.fixCameraContinuity);
 export default router;

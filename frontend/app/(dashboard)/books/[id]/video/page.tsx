@@ -13,6 +13,7 @@ type Shot = {
   cameraMovement?: string; cameraSpeed?: string; cameraAngle?: string; cameraRig?: string;
   lens?: string; focalLength?: string; framing?: string; movementPurpose?: string;
   focusMode?: string; depthOfField?: string; composition?: string; movement?: string;
+  cameraContinuityWarnings?: { severity?: string; score?: number; issues?: Array<{ severity: string; message: string; suggestion?: string }> };
 };
 type Scene = { id: string; sceneNumber: number; status: string; sourceText: string; visualPrompt?: string; negativePrompt?: string; videoUrl?: string; estimatedDurationSec?: number; shots?: Shot[] };
 type VideoProject = { id: string; name: string; status: string; progress: number; totalChapters: number; totalScenes: number; completedScenes: number; visualStyle: string; aspectRatio: string; subtitleEnabled: boolean; subtitleMode: string; subtitleStyle: string; finalVideoUrl?: string; cleanVideoUrl?: string; subtitleVideoUrl?: string; srtUrl?: string; vttUrl?: string; assUrl?: string; errorMessage?: string; filmBible?: { premise?: string; genre?: string; tone?: string }; scenes?: Scene[]; characters?: Array<{ id: string; name: string; referenceImageUrl?: string }>; locations?: Array<{ id: string; name: string; referenceImageUrl?: string }> };
@@ -131,6 +132,50 @@ export default function BookVideoStudioPage({ params }: { params: { id: string }
         recompilePrompt: true,
       });
       setEditingShotId(null);
+      setActive(await api.get<VideoProject>(`/video-projects/${active!.id}`));
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function generateCameraForShot(shotId: string) {
+    if (!active) return;
+    setBusy(true); setError(null);
+    try {
+      await api.post(`/video-shots/${shotId}/generate-camera`, {});
+      setActive(await api.get<VideoProject>(`/video-projects/${active!.id}`));
+      // re-seed editor if open
+      const proj = await api.get<VideoProject>(`/video-projects/${active!.id}`);
+      const shot = proj.scenes?.flatMap((s) => s.shots || []).find((s) => s.id === shotId);
+      if (shot && editingShotId === shotId) {
+        setEditShotPrompt(shot.visualPrompt || "");
+        setEditCam({
+          cameraMovement: shot.cameraMovement || '',
+          cameraSpeed: shot.cameraSpeed || '',
+          cameraRig: shot.cameraRig || '',
+          cameraAngle: shot.cameraAngle || '',
+          framing: shot.framing || '',
+          movementPurpose: shot.movementPurpose || '',
+          lens: shot.lens || shot.focalLength || '',
+          depthOfField: shot.depthOfField || '',
+          focusMode: shot.focusMode || '',
+        });
+      }
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function regenerateShotVideo(shotId: string) {
+    if (!active) return;
+    setBusy(true); setError(null);
+    try {
+      await api.post(`/video-shots/${shotId}/regenerate`, {});
+      setActive(await api.get<VideoProject>(`/video-projects/${active!.id}`));
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  async function fixCameraContinuity(shotId: string) {
+    if (!active) return;
+    setBusy(true); setError(null);
+    try {
+      await api.post(`/video-shots/${shotId}/fix-continuity`, {});
       setActive(await api.get<VideoProject>(`/video-projects/${active!.id}`));
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   }
@@ -338,7 +383,8 @@ export default function BookVideoStudioPage({ params }: { params: { id: string }
                                     ['framing', 'Framing', ['EXTREME_WIDE','WIDE','FULL','MEDIUM_WIDE','MEDIUM','MEDIUM_CLOSE_UP','CLOSE_UP','EXTREME_CLOSE_UP','TWO_SHOT','OVER_SHOULDER','INSERT','CUTAWAY','POV_FRAME']],
                                     ['movementPurpose', 'Purpose', ['ESTABLISH_LOCATION','FOLLOW_CHARACTER','FOLLOW_ACTION','BUILD_TENSION','CREATE_INTIMACY','CREATE_DISTANCE','SHOW_SCALE','REVEAL_INFORMATION','REVEAL_CHARACTER','REVEAL_OBJECT','EMPHASIZE_EMOTION','CREATE_DISORIENTATION','TRANSITION']],
                                     ['lens', 'Lens', ['14mm','24mm','35mm','50mm','85mm','100mm','135mm','200mm']],
-                                    ['depthOfField', 'DoF', ['SHALLOW','MEDIUM','DEEP']],
+                                    ['depthOfField', 'DoF', ['SHALLOW','MODERATE','MEDIUM','DEEP','EXTREME_SHALLOW']],
+                                    ['focusMode', 'Focus', ['FIXED','DEEP_FOCUS','SHALLOW_FOCUS','RACK_FOCUS','AUTO_FOCUS','SELECTIVE_FOCUS','FOLLOW_FOCUS','SOFT_FOCUS']],
                                   ] as [string, string, string[]][]).map(([key, label, opts]) => (
                                     <label key={key} className="text-[10px] block">
                                       {label}
@@ -356,6 +402,8 @@ export default function BookVideoStudioPage({ params }: { params: { id: string }
                                 <label className="text-[10px]">Visual prompt<textarea className="mt-0.5 w-full rounded border bg-background px-1.5 py-1 text-xs min-h-[50px]" value={editShotPrompt} onChange={(e) => setEditShotPrompt(e.target.value)} placeholder="Blank = auto-compile from camera params" /></label>
                                 <div className="flex gap-1">
                                   <Button size="sm" className="h-6 text-xs" onClick={() => saveShotPrompt(shot.id)} disabled={busy}>Save & recompile</Button>
+                                  <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => generateCameraForShot(shot.id)} disabled={busy}>AI Generate Camera</Button>
+                                  <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => regenerateShotVideo(shot.id)} disabled={busy}>Regenerate shot</Button>
                                   <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setEditingShotId(null)}>Cancel</Button>
                                 </div>
                               </div>
@@ -367,6 +415,20 @@ export default function BookVideoStudioPage({ params }: { params: { id: string }
                                   </p>
                                 )}
                                 {shot.visualPrompt && <p className="line-clamp-1">{shot.visualPrompt}</p>}
+                                {shot.cameraContinuityWarnings?.issues?.filter((i) => i.severity === 'WARNING').length ? (
+                                  <div className="rounded border border-amber-500/40 bg-amber-500/10 p-1.5 text-[10px] text-amber-800 dark:text-amber-200 space-y-1">
+                                    <p className="font-medium">⚠ Camera Continuity Warning
+                                      {typeof shot.cameraContinuityWarnings.score === 'number' ? ` · score ${shot.cameraContinuityWarnings.score}` : ''}
+                                    </p>
+                                    {shot.cameraContinuityWarnings.issues.filter((i) => i.severity === 'WARNING').map((i, n) => (
+                                      <p key={n}>{i.message}{i.suggestion ? ` — ${i.suggestion}` : ''}</p>
+                                    ))}
+                                    <div className="flex gap-1 pt-0.5">
+                                      <Button size="sm" variant="ghost" className="h-5 px-1 text-[10px]" onClick={() => setEditingShotId(shot.id)}>Keep / Edit</Button>
+                                      <Button size="sm" variant="outline" className="h-5 px-1 text-[10px]" onClick={() => fixCameraContinuity(shot.id)} disabled={busy}>AI Fix</Button>
+                                    </div>
+                                  </div>
+                                ) : null}
                               </div>
                             )}
                           </div>
