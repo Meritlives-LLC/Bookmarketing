@@ -7,6 +7,7 @@ import { videoProjectRepository } from '../repositories/video-project.repository
 import { filmBibleRepository } from '../repositories/film-bible.repository';
 import { videoCharacterRepository } from '../repositories/video-character.repository';
 import { videoLocationRepository } from '../repositories/video-location.repository';
+import { chunkTextHierarchical } from '../utils/text-chunking';
 
 const ChapterAnalysisSchema = z.object({
   chapterNumber: z.number().optional(),
@@ -71,14 +72,39 @@ export const bookVideoAnalysisService = {
     const chapterAnalyses: z.infer<typeof ChapterAnalysisSchema>[] = [];
     for (let i = 0; i < chapters.length; i++) {
       const chapter = chapters[i];
-      const textSlice = chapter.sourceText.length > 12000 ? chapter.sourceText.slice(0, 12000) + '\n\n[...]' : chapter.sourceText;
+      // Hierarchical chunking — every character of the chapter is analyzed; nothing discarded.
+      const chunks = chunkTextHierarchical(chapter.sourceText, 8000);
       try {
-        const analysis = await callStructuredJson(
-          'You are a film production analyst. Extract ONLY what appears in the chapter text. Do NOT invent facts. Return JSON.',
-          `Chapter ${chapter.chapterNumber}${chapter.title ? `: ${chapter.title}` : ''}\n\n${textSlice}`,
-          ChapterAnalysisSchema, `chapter-${chapter.chapterNumber}`
-        );
-        analysis.chapterNumber = chapter.chapterNumber;
+        const partials: z.infer<typeof ChapterAnalysisSchema>[] = [];
+        for (const chunk of chunks) {
+          const partial = await callStructuredJson(
+            'You are a film production analyst. Extract ONLY what appears in this text chunk. Do NOT invent facts. Return JSON with characters, locations, props, events, themes, tone.',
+            `Chapter ${chapter.chapterNumber}${chapter.title ? `: ${chapter.title}` : ''} — chunk ${chunk.index + 1}/${chunks.length} (chars ${chunk.start}-${chunk.end} of ${chapter.sourceText.length})\n\n${chunk.text}`,
+            ChapterAnalysisSchema,
+            `chapter-${chapter.chapterNumber}-chunk-${chunk.index}`
+          );
+          partials.push(partial);
+        }
+        // Merge chunk analyses (dedupe by name case-insensitively)
+        const mergeByName = <T extends { name: string }>(lists: T[][]): T[] => {
+          const map = new Map<string, T>();
+          for (const list of lists) {
+            for (const item of list) {
+              const key = item.name.toLowerCase();
+              if (!map.has(key)) map.set(key, item);
+            }
+          }
+          return [...map.values()];
+        };
+        const analysis: z.infer<typeof ChapterAnalysisSchema> = {
+          chapterNumber: chapter.chapterNumber,
+          characters: mergeByName(partials.map((p) => p.characters)),
+          locations: mergeByName(partials.map((p) => p.locations)),
+          props: mergeByName(partials.map((p) => p.props)),
+          events: partials.flatMap((p) => p.events),
+          themes: [...new Set(partials.flatMap((p) => p.themes))],
+          tone: partials.find((p) => p.tone)?.tone ?? null,
+        };
         chapterAnalyses.push(analysis);
         for (const c of analysis.characters) {
           await videoCharacterRepository.upsertByName(videoProjectId, c.name, {

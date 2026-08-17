@@ -63,6 +63,10 @@ export const videoProjectController = {
     try { res.status(202).json({ success: true, data: await videoProjectService.regenerateScene(req.user!.id, req.params.sceneId) }); }
     catch (error) { next(error); }
   },
+  async regenerateShot(req: Request, res: Response, next: NextFunction) {
+    try { res.status(202).json({ success: true, data: await videoProjectService.regenerateShot(req.user!.id, req.params.shotId) }); }
+    catch (error) { next(error); }
+  },
   async updateScenePrompt(req: Request, res: Response, next: NextFunction) {
     try { res.json({ success: true, data: await videoProjectService.updateScenePrompt(req.user!.id, req.params.sceneId, req.body || {}) }); }
     catch (error) { next(error); }

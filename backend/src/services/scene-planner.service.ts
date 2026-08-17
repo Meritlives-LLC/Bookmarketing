@@ -5,6 +5,12 @@ import { logger } from '../utils/logger';
 import { AppError } from '../utils/helpers';
 import { videoProjectRepository } from '../repositories/video-project.repository';
 import { videoSceneRepository } from '../repositories/video-scene.repository';
+import { chunkTextHierarchical, splitDurationIntoShots } from '../utils/text-chunking';
+import {
+  segmentChapterDeterministic,
+  repairCoverageOrFallback,
+  assertFullCoverage,
+} from '../utils/deterministic-scene-segmentation';
 
 const SceneListSchema = z.object({
   scenes: z.array(z.object({
@@ -26,22 +32,42 @@ const SceneListSchema = z.object({
 });
 
 function validateCoverage(chapterText: string, proposals: Array<{ sourceStart: number; sourceEnd: number }>) {
-  const errors: string[] = [];
-  const sorted = [...proposals].sort((a, b) => a.sourceStart - b.sourceStart);
-  if (!sorted.length) return { ok: false, errors: ['No scenes'] };
-  if (sorted[0].sourceStart > 0) errors.push('Gap at start');
-  for (let i = 0; i < sorted.length; i++) {
-    const s = sorted[i];
-    if (s.sourceEnd <= s.sourceStart) errors.push(`Scene ${i+1}: end <= start`);
-    if (s.sourceEnd > chapterText.length) errors.push(`Scene ${i+1}: beyond end`);
-    if (i > 0) {
-      if (s.sourceStart < sorted[i-1].sourceEnd) errors.push(`Overlap at ${s.sourceStart}`);
-      else if (s.sourceStart > sorted[i-1].sourceEnd) errors.push(`Gap at ${s.sourceStart}`);
-    }
-  }
-  const last = sorted[sorted.length - 1];
-  if (last.sourceEnd < chapterText.length && chapterText.slice(last.sourceEnd).trim()) errors.push('Gap at end');
-  return { ok: errors.length === 0, errors };
+  return assertFullCoverage(chapterText, proposals);
+}
+
+/** Map deterministic scenes into the AI plan shape used downstream. */
+function toPlanScenes(
+  segs: ReturnType<typeof segmentChapterDeterministic>,
+  characters: string[],
+  location: string | null
+) {
+  return segs.map((seg) => ({
+    sceneNumber: seg.sceneNumber,
+    sourceStart: seg.sourceStart,
+    sourceEnd: seg.sourceEnd,
+    summary: null as string | null,
+    characters: characters.slice(0, 5),
+    location,
+    props: [] as string[],
+    action: null as string | null,
+    emotionalBeat: null as string | null,
+    estimatedDurationSec: seg.estimatedDurationSec,
+    shots: seg.shots.map((sh) => ({
+      shotNumber: sh.shotNumber,
+      shotType: sh.shotType,
+      sourceTextSegment: sh.sourceTextSegment,
+      durationSec: sh.durationSec,
+      startOffsetSec: sh.startOffsetSec,
+      camera: sh.camera,
+      lens: sh.lens,
+      movement: sh.movement,
+      composition: sh.composition,
+      lighting: sh.lighting,
+      visualPrompt: null as string | null,
+      negativePrompt: null as string | null,
+      action: null as string | null,
+    })),
+  }));
 }
 
 function buildVisualPrompt(opts: {
@@ -70,31 +96,43 @@ function buildVisualPrompt(opts: {
 
 async function callScenePlan(chapterText: string, chapterNumber: number, title: string | null, filmStyle: string, characters: string[], locations: string[]) {
   const apiKey = config.ai.groq.apiKey;
-  const fallback = {
-    scenes: [{
-      sceneNumber: 1, sourceStart: 0, sourceEnd: chapterText.length, summary: null as string | null,
-      characters: characters.slice(0, 5), location: locations[0] ?? null, props: [] as string[],
-      action: null as string | null, emotionalBeat: null as string | null,
-      estimatedDurationSec: Math.max(8, Math.round(chapterText.split(/\s+/).length / 2.5)),
-      shots: [{ shotNumber: 1, shotType: 'medium' as string | null, durationSec: Math.max(8, Math.round(chapterText.split(/\s+/).length / 2.5)), startOffsetSec: 0 }],
-    }],
-  };
-  if (!apiKey) return fallback;
-  const slice = chapterText.length > 14000 ? chapterText.slice(0, 14000) + '\n\n[...]' : chapterText;
-  const res = await fetch(`${config.ai.groq.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: config.ai.groq.model || 'openai/gpt-oss-120b', temperature: 0.15, response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: 'Segment chapter into cinematic scenes+shots. sourceStart/sourceEnd are 0-based offsets covering the ENTIRE chapter with no gaps/overlaps. Do NOT rewrite story. Return JSON.' },
-        { role: 'user', content: `Chapter ${chapterNumber}${title ? `: ${title}` : ''}\nStyle: ${filmStyle}\nCharacters: ${characters.join(', ') || 'none'}\nLocations: ${locations.join(', ') || 'none'}\nLength: ${chapterText.length}\n\n${slice}` },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`Scene plan AI failed ${res.status}`);
-  const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return SceneListSchema.parse(JSON.parse(json.choices?.[0]?.message?.content || '{"scenes":[]}'));
+  if (!apiKey) {
+    // Offline: full hierarchical deterministic segmentation (100% coverage)
+    const segs = segmentChapterDeterministic(chapterText, { targetWordsPerScene: 350, wpm: 150 });
+    return {
+      scenes: toPlanScenes(segs, characters, locations[0] ?? null),
+    };
+  }
+  // Hierarchical: plan each chunk, then merge scene proposals with absolute offsets
+  const chunks = chunkTextHierarchical(chapterText, 10000);
+  const allScenes: z.infer<typeof SceneListSchema>['scenes'] = [];
+  let sceneCounter = 0;
+  for (const chunk of chunks) {
+    const res = await fetch(`${config.ai.groq.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: config.ai.groq.model || 'openai/gpt-oss-120b', temperature: 0.15, response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'Segment this text into cinematic scenes+shots. sourceStart/sourceEnd are 0-based offsets RELATIVE TO THIS CHUNK covering the ENTIRE chunk with no gaps/overlaps. Do NOT rewrite story. Return JSON {scenes:[...]}.' },
+          { role: 'user', content: `Chapter ${chapterNumber}${title ? `: ${title}` : ''} chunk ${chunk.index + 1}/${chunks.length}\nStyle: ${filmStyle}\nCharacters: ${characters.join(', ') || 'none'}\nLocations: ${locations.join(', ') || 'none'}\nChunk length: ${chunk.text.length}\n\n${chunk.text}` },
+        ],
+      }),
+    });
+    if (!res.ok) throw new Error(`Scene plan AI failed ${res.status} on chunk ${chunk.index}`);
+    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const parsed = SceneListSchema.parse(JSON.parse(json.choices?.[0]?.message?.content || '{"scenes":[]}'));
+    for (const s of parsed.scenes) {
+      sceneCounter += 1;
+      allScenes.push({
+        ...s,
+        sceneNumber: sceneCounter,
+        sourceStart: chunk.start + s.sourceStart,
+        sourceEnd: chunk.start + s.sourceEnd,
+      });
+    }
+  }
+  return { scenes: allScenes };
 }
 
 export const scenePlannerService = {
@@ -115,23 +153,32 @@ export const scenePlannerService = {
       try {
         plan = await callScenePlan(chapter.sourceText, chapter.chapterNumber, chapter.title, filmStyle, characters.map((c) => c.name), locations.map((l) => l.name));
       } catch (error) {
-        logger.error('Scene plan failed — single scene fallback', { error: (error as Error).message });
+        logger.error('Scene plan failed — deterministic segmentation fallback', { error: (error as Error).message });
+        const segs = segmentChapterDeterministic(chapter.sourceText, { targetWordsPerScene: 350, wpm });
         plan = {
-          scenes: [{
-            sceneNumber: 1, sourceStart: 0, sourceEnd: chapter.sourceText.length, summary: null,
-            characters: characters.map((c) => c.name).slice(0, 5), location: locations[0]?.name ?? null, props: [] as string[],
-            action: null, emotionalBeat: null, estimatedDurationSec: Math.max(8, Math.round(chapter.wordCount / (wpm / 60))),
-            shots: [{ shotNumber: 1, shotType: 'medium' as string | null, durationSec: Math.max(8, Math.round(chapter.wordCount / (wpm / 60))), startOffsetSec: 0 }],
-          }],
+          scenes: toPlanScenes(segs, characters.map((c) => c.name), locations[0]?.name ?? null),
         };
       }
       if (!validateCoverage(chapter.sourceText, plan.scenes).ok) {
-        plan.scenes = [{
-          sceneNumber: 1, sourceStart: 0, sourceEnd: chapter.sourceText.length, summary: null,
-          characters: characters.map((c) => c.name).slice(0, 5), location: locations[0]?.name ?? null, props: [],
-          action: null, emotionalBeat: null, estimatedDurationSec: Math.max(8, Math.round(chapter.wordCount / (wpm / 60))),
-          shots: [{ shotNumber: 1, shotType: 'medium', durationSec: Math.max(8, Math.round(chapter.wordCount / (wpm / 60))), startOffsetSec: 0 }],
-        }];
+        // Repair AI ranges if possible; otherwise full deterministic hierarchy
+        logger.warn('AI scene coverage invalid — applying deterministic segmentation', {
+          chapterNumber: chapter.chapterNumber,
+          ...validateCoverage(chapter.sourceText, plan.scenes),
+        });
+        const repaired = repairCoverageOrFallback(
+          chapter.sourceText,
+          plan.scenes,
+          { targetWordsPerScene: 350, wpm }
+        );
+        // If repair still fails coverage, force pure deterministic
+        const finalSegs = assertFullCoverage(chapter.sourceText, repaired).ok
+          ? repaired
+          : segmentChapterDeterministic(chapter.sourceText, { targetWordsPerScene: 350, wpm });
+        plan.scenes = toPlanScenes(
+          finalSegs,
+          characters.map((c) => c.name),
+          locations[0]?.name ?? null
+        );
       }
       if (chapterId) await prisma.videoScene.deleteMany({ where: { chapterId: chapter.id, videoProjectId } });
       for (const proposal of plan.scenes) {
@@ -154,12 +201,33 @@ export const scenePlannerService = {
             estimatedDurationSec, sourceStart: start, sourceEnd: end, status: 'PROMPT_READY',
           },
         });
-        const shots = proposal.shots?.length ? proposal.shots : [{ shotNumber: 1, shotType: 'medium', durationSec: estimatedDurationSec, startOffsetSec: 0, visualPrompt }];
-        for (const shot of shots) {
+        // Ensure shot durations respect provider max (~8s); split oversize shots
+        let rawShots = proposal.shots?.length
+          ? proposal.shots
+          : [{ shotNumber: 1, shotType: 'medium', durationSec: estimatedDurationSec, startOffsetSec: 0, visualPrompt }];
+        const expanded: typeof rawShots = [];
+        let globalOff = 0;
+        let shotNum = 1;
+        for (const rs of rawShots) {
+          const durs = splitDurationIntoShots(rs.durationSec ?? estimatedDurationSec, 8, 2);
+          const seg = rs.sourceTextSegment || sourceText;
+          for (const d of durs) {
+            expanded.push({
+              ...rs,
+              shotNumber: shotNum++,
+              durationSec: d,
+              startOffsetSec: globalOff,
+              sourceTextSegment: seg,
+              visualPrompt: rs.visualPrompt ?? visualPrompt,
+            });
+            globalOff += d;
+          }
+        }
+        for (const shot of expanded) {
           await prisma.videoShot.create({
             data: {
               sceneId: scene.id, shotNumber: shot.shotNumber, shotType: shot.shotType ?? null,
-              sourceTextSegment: shot.sourceTextSegment ?? null, action: shot.action ?? null,
+              sourceTextSegment: shot.sourceTextSegment ?? sourceText, action: shot.action ?? null,
               camera: shot.camera ?? null, lens: shot.lens ?? null, movement: shot.movement ?? null,
               composition: shot.composition ?? null, lighting: shot.lighting ?? null,
               durationSec: shot.durationSec ?? estimatedDurationSec, startOffsetSec: shot.startOffsetSec ?? 0,

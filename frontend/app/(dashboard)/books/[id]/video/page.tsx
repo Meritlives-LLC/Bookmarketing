@@ -8,7 +8,12 @@ import { Badge } from "@/components/ui/badge";
 import { api, ApiError } from "@/lib/api/client";
 
 type Manuscript = { id: string; originalFileName: string; fileType: string; fileSize: number; extractionStatus: string; extractedWordCount?: number; chapters?: Array<{ id: string; chapterNumber: number; title?: string; wordCount: number }>; };
-type Shot = { id: string; shotNumber: number; shotType?: string; camera?: string; visualPrompt?: string; durationSec?: number; status: string };
+type Shot = {
+  id: string; shotNumber: number; shotType?: string; camera?: string; visualPrompt?: string; durationSec?: number; status: string;
+  cameraMovement?: string; cameraSpeed?: string; cameraAngle?: string; cameraRig?: string;
+  lens?: string; focalLength?: string; framing?: string; movementPurpose?: string;
+  focusMode?: string; depthOfField?: string; composition?: string; movement?: string;
+};
 type Scene = { id: string; sceneNumber: number; status: string; sourceText: string; visualPrompt?: string; negativePrompt?: string; videoUrl?: string; estimatedDurationSec?: number; shots?: Shot[] };
 type VideoProject = { id: string; name: string; status: string; progress: number; totalChapters: number; totalScenes: number; completedScenes: number; visualStyle: string; aspectRatio: string; subtitleEnabled: boolean; subtitleMode: string; subtitleStyle: string; finalVideoUrl?: string; cleanVideoUrl?: string; subtitleVideoUrl?: string; srtUrl?: string; vttUrl?: string; assUrl?: string; errorMessage?: string; filmBible?: { premise?: string; genre?: string; tone?: string }; scenes?: Scene[]; characters?: Array<{ id: string; name: string; referenceImageUrl?: string }>; locations?: Array<{ id: string; name: string; referenceImageUrl?: string }> };
 type Progress = { projectId: string; status: string; progress: number; totalChapters: number; totalScenes: number; completedScenes: number; stageLabel: string; errorMessage?: string };
@@ -28,6 +33,7 @@ export default function BookVideoStudioPage({ params }: { params: { id: string }
   const [editingShotId, setEditingShotId] = useState<string | null>(null);
   const [editShotPrompt, setEditShotPrompt] = useState("");
   const [editShotCamera, setEditShotCamera] = useState("");
+  const [editCam, setEditCam] = useState<Record<string, string>>({});
   const [settings, setSettings] = useState({ visualStyle: "CINEMATIC_REALISM", aspectRatio: "RATIO_16_9", subtitleMode: "SOFT", subtitleStyle: "CINEMATIC", subtitleEnabled: true });
 
   const load = useCallback(async () => {
@@ -115,12 +121,18 @@ export default function BookVideoStudioPage({ params }: { params: { id: string }
     finally { setBusy(false); }
   }
   async function saveShotPrompt(shotId: string) {
-    setBusy(true);
+    if (!active) return;
+    setBusy(true); setError(null);
     try {
-      await api.patch(`/video-shots/${shotId}/prompt`, { visualPrompt: editShotPrompt, camera: editShotCamera });
-      setEditingShotId(null); setActive(await api.get<VideoProject>(`/video-projects/${active!.id}`));
-    } catch (e) { setError(e instanceof ApiError ? e.message : "Save failed"); }
-    finally { setBusy(false); }
+      await api.patch(`/video-shots/${shotId}/prompt`, {
+        visualPrompt: editShotPrompt || undefined,
+        camera: editShotCamera || undefined,
+        ...editCam,
+        recompilePrompt: true,
+      });
+      setEditingShotId(null);
+      setActive(await api.get<VideoProject>(`/video-projects/${active!.id}`));
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   }
   async function saveSubtitleSettings() {
     if (!active) return; setBusy(true);
@@ -296,21 +308,67 @@ export default function BookVideoStudioPage({ params }: { params: { id: string }
                             <div className="flex items-center justify-between">
                               <span>Shot {shot.shotNumber}{shot.shotType ? ` · ${shot.shotType}` : ""}{shot.durationSec ? ` · ${shot.durationSec}s` : ""}</span>
                               {editingShotId !== shot.id && (
-                                <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => { setEditingShotId(shot.id); setEditShotPrompt(shot.visualPrompt || ""); setEditShotCamera(shot.camera || ""); }}>
+                                <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => {
+                                  setEditingShotId(shot.id);
+                                  setEditShotPrompt(shot.visualPrompt || "");
+                                  setEditShotCamera(shot.camera || "");
+                                  setEditCam({
+                                    cameraMovement: shot.cameraMovement || '',
+                                    cameraSpeed: shot.cameraSpeed || '',
+                                    cameraRig: shot.cameraRig || '',
+                                    cameraAngle: shot.cameraAngle || '',
+                                    framing: shot.framing || '',
+                                    movementPurpose: shot.movementPurpose || '',
+                                    lens: shot.lens || shot.focalLength || '',
+                                    depthOfField: shot.depthOfField || '',
+                                  });
+                                }}>
                                   <Pencil className="h-3 w-3" />
                                 </Button>
                               )}
                             </div>
                             {editingShotId === shot.id ? (
-                              <div className="space-y-1 rounded border bg-muted/20 p-2">
-                                <label className="text-[10px]">Camera<input className="mt-0.5 w-full rounded border bg-background px-1.5 py-1 text-xs" value={editShotCamera} onChange={(e) => setEditShotCamera(e.target.value)} /></label>
-                                <label className="text-[10px]">Visual prompt<textarea className="mt-0.5 w-full rounded border bg-background px-1.5 py-1 text-xs min-h-[50px]" value={editShotPrompt} onChange={(e) => setEditShotPrompt(e.target.value)} /></label>
+                              <div className="space-y-1.5 rounded border bg-muted/20 p-2">
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  {([
+                                    ['cameraMovement', 'Movement', ['STATIC','PAN_LEFT','PAN_RIGHT','TILT_UP','TILT_DOWN','DOLLY_IN','DOLLY_OUT','PUSH_IN','PULL_OUT','TRACKING','FOLLOW','ORBIT','ARC','CRANE_UP','CRANE_DOWN','HANDHELD','STEADICAM','GIMBAL','ZOOM_IN','ZOOM_OUT','WHIP_PAN','DRONE_RISE','DRONE_DESCEND','DRONE_FORWARD','DRONE_BACKWARD','DOLLY_ZOOM','POV','FIRST_PERSON','CUSTOM']],
+                                    ['cameraSpeed', 'Speed', ['VERY_SLOW','SLOW','MEDIUM','FAST','VERY_FAST']],
+                                    ['cameraRig', 'Rig', ['STATIC_TRIPOD','HANDHELD','STEADICAM','GIMBAL','DOLLY','CRANE','JIB','DRONE','SHOULDER','POV','UNKNOWN']],
+                                    ['cameraAngle', 'Angle', ['EYE_LEVEL','LOW_ANGLE','HIGH_ANGLE','BIRDS_EYE','WORMS_EYE','DUTCH_ANGLE','OVERHEAD','GROUND_LEVEL']],
+                                    ['framing', 'Framing', ['EXTREME_WIDE','WIDE','FULL','MEDIUM_WIDE','MEDIUM','MEDIUM_CLOSE_UP','CLOSE_UP','EXTREME_CLOSE_UP','TWO_SHOT','OVER_SHOULDER','INSERT','CUTAWAY','POV_FRAME']],
+                                    ['movementPurpose', 'Purpose', ['ESTABLISH_LOCATION','FOLLOW_CHARACTER','FOLLOW_ACTION','BUILD_TENSION','CREATE_INTIMACY','CREATE_DISTANCE','SHOW_SCALE','REVEAL_INFORMATION','REVEAL_CHARACTER','REVEAL_OBJECT','EMPHASIZE_EMOTION','CREATE_DISORIENTATION','TRANSITION']],
+                                    ['lens', 'Lens', ['14mm','24mm','35mm','50mm','85mm','100mm','135mm','200mm']],
+                                    ['depthOfField', 'DoF', ['SHALLOW','MEDIUM','DEEP']],
+                                  ] as [string, string, string[]][]).map(([key, label, opts]) => (
+                                    <label key={key} className="text-[10px] block">
+                                      {label}
+                                      <select
+                                        className="mt-0.5 w-full rounded border bg-background px-1.5 py-1 text-xs"
+                                        value={editCam[key] ?? ''}
+                                        onChange={(e) => setEditCam((c) => ({ ...c, [key]: e.target.value }))}
+                                      >
+                                        <option value="">—</option>
+                                        {opts.map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
+                                      </select>
+                                    </label>
+                                  ))}
+                                </div>
+                                <label className="text-[10px]">Visual prompt<textarea className="mt-0.5 w-full rounded border bg-background px-1.5 py-1 text-xs min-h-[50px]" value={editShotPrompt} onChange={(e) => setEditShotPrompt(e.target.value)} placeholder="Blank = auto-compile from camera params" /></label>
                                 <div className="flex gap-1">
-                                  <Button size="sm" className="h-6 text-xs" onClick={() => saveShotPrompt(shot.id)} disabled={busy}>Save</Button>
+                                  <Button size="sm" className="h-6 text-xs" onClick={() => saveShotPrompt(shot.id)} disabled={busy}>Save & recompile</Button>
                                   <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setEditingShotId(null)}>Cancel</Button>
                                 </div>
                               </div>
-                            ) : (shot.visualPrompt && <p className="text-muted-foreground line-clamp-1">{shot.visualPrompt}</p>)}
+                            ) : (
+                              <div className="text-muted-foreground space-y-0.5">
+                                {(shot.cameraMovement || shot.framing) && (
+                                  <p className="line-clamp-1 text-[10px]">
+                                    {[shot.framing, shot.cameraMovement, shot.cameraSpeed, shot.cameraRig, shot.lens || shot.focalLength, shot.movementPurpose].filter(Boolean).join(' · ')}
+                                  </p>
+                                )}
+                                {shot.visualPrompt && <p className="line-clamp-1">{shot.visualPrompt}</p>}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>

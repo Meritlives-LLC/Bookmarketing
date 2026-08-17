@@ -23,4 +23,5 @@ router.post('/video-scenes/:sceneId/regenerate', videoProjectController.regenera
 router.post('/video-scenes/:sceneId/generate', videoProjectController.regenerateScene);
 router.patch('/video-scenes/:sceneId/prompt', videoProjectController.updateScenePrompt);
 router.patch('/video-shots/:shotId/prompt', videoProjectController.updateShotPrompt);
+router.post('/video-shots/:shotId/regenerate', videoProjectController.regenerateShot);
 export default router;

@@ -24,8 +24,19 @@ class GeminiVeoProvider implements VideoProvider {
   async generateVideo(req: VideoGenerationRequest): Promise<VideoGenerationResult> {
     const model = req.model || this.model;
     const url = `${this.baseUrl}/models/${model}:predictLongRunning?key=${this.apiKey}`;
+    // Pass reference images when the model supports them (Veo image-to-video / reference).
+    // Do not fake support — only include fields the current API accepts.
+    const instance: Record<string, unknown> = { prompt: req.prompt };
+    if (req.referenceImageUrls?.length) {
+      // Gemini/Veo currently accepts reference images as image objects with uri/bytes.
+      // We pass public HTTPS URLs; if the model rejects, the error surfaces to the worker.
+      instance.image = { uri: req.referenceImageUrls[0] };
+      if (req.referenceImageUrls.length > 1) {
+        instance.referenceImages = req.referenceImageUrls.slice(0, 3).map((uri) => ({ uri }));
+      }
+    }
     const body = {
-      instances: [{ prompt: req.prompt }],
+      instances: [instance],
       parameters: {
         aspectRatio: req.aspectRatio || '16:9',
         ...(req.durationSec ? { durationSeconds: Math.min(8, Math.max(2, Math.round(req.durationSec))) } : {}),

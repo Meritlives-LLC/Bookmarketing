@@ -78,16 +78,55 @@ export const subtitleService = {
     const scene = await prisma.videoScene.findUnique({ where: { id: sceneId } });
     if (!scene) throw AppError.notFound('Scene not found');
     const text = scene.narrationText || scene.sourceText;
-    const durationSec = scene.narrationDurationSec ?? scene.actualDurationSec ?? scene.estimatedDurationSec ?? Math.max(4, text.split(/\s+/).length / 2.5);
-    const totalMs = Math.round(durationSec * 1000);
+    // Timing priority: 1) word timestamps  2) actual narration/audio duration  3) estimated
+    const wordTs = await prisma.wordTimestamp.findMany({
+      where: { sceneId },
+      orderBy: { index: 'asc' },
+    });
     const project = await prisma.videoProject.findUnique({ where: { id: scene.videoProjectId } });
     const cfg = (project?.subtitleConfig as Record<string, number>) || {};
-    const cues = splitIntoCues(text, totalMs, {
-      maxChars: cfg.maxCharsPerLine ?? DEFAULT_MAX_CHARS,
-      maxLines: cfg.maxLines ?? DEFAULT_MAX_LINES,
-      minMs: cfg.minDurationMs ?? DEFAULT_MIN_MS,
-      maxMs: cfg.maxDurationMs ?? DEFAULT_MAX_MS,
-    });
+    let cues: SubtitleCueDraft[];
+    if (wordTs.length > 0) {
+      // Build cues from real word timestamps — pack into readable segments without changing words
+      const maxChars = cfg.maxCharsPerLine ?? DEFAULT_MAX_CHARS;
+      const maxLines = cfg.maxLines ?? DEFAULT_MAX_LINES;
+      const limit = maxChars * maxLines;
+      cues = [];
+      let buf: typeof wordTs = [];
+      let seq = 1;
+      const flush = () => {
+        if (!buf.length) return;
+        cues.push({
+          sequence: seq++,
+          text: buf.map((w) => w.word).join(' '),
+          startTimeMs: buf[0].startMs,
+          endTimeMs: buf[buf.length - 1].endMs,
+          startWordIndex: buf[0].index,
+          endWordIndex: buf[buf.length - 1].index,
+        });
+        buf = [];
+      };
+      for (const w of wordTs) {
+        const candidate = [...buf, w].map((x) => x.word).join(' ');
+        if (buf.length && candidate.length > limit) flush();
+        buf.push(w);
+      }
+      flush();
+    } else {
+      const durationSec =
+        scene.narrationDurationSec ??
+        scene.actualDurationSec ??
+        scene.estimatedDurationSec ??
+        Math.max(4, text.split(/\s+/).length / 2.5);
+      // Only use estimated when actual durations are absent
+      const totalMs = Math.round(durationSec * 1000);
+      cues = splitIntoCues(text, totalMs, {
+        maxChars: cfg.maxCharsPerLine ?? DEFAULT_MAX_CHARS,
+        maxLines: cfg.maxLines ?? DEFAULT_MAX_LINES,
+        minMs: cfg.minDurationMs ?? DEFAULT_MIN_MS,
+        maxMs: cfg.maxDurationMs ?? DEFAULT_MAX_MS,
+      });
+    }
     const errors = validateCues(cues, totalMs);
     if (errors.length) logger.warn('Subtitle validation issues', { sceneId, errors });
     await prisma.subtitleCue.deleteMany({ where: { sceneId } });

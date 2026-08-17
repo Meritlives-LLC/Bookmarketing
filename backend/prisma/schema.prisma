@@ -681,8 +681,9 @@ model VideoScene {
   status                VideoSceneStatus  @default(PENDING)
   provider              VideoProviderName?
   providerGenerationId  String?
-  videoUrl              String?
+  videoUrl              String?             /// assembled scene master from shots
   audioUrl              String?
+  narrationAudioUrl     String?
   subtitleUrl           String?
   thumbnailUrl          String?
   lastErrorType         ProviderErrorType?
@@ -691,8 +692,9 @@ model VideoScene {
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
 
-  shots         VideoShot[]
-  subtitleCues  SubtitleCue[]
+  shots           VideoShot[]
+  subtitleCues    SubtitleCue[]
+  wordTimestamps  WordTimestamp[]
 
   @@unique([videoProjectId, chapterId, sceneNumber])
   @@index([videoProjectId])
@@ -702,32 +704,160 @@ model VideoScene {
   @@map("video_scenes")
 }
 
+
+enum CameraMovement {
+  STATIC
+  PAN_LEFT
+  PAN_RIGHT
+  TILT_UP
+  TILT_DOWN
+  DOLLY_IN
+  DOLLY_OUT
+  PUSH_IN
+  PULL_OUT
+  TRACKING
+  FOLLOW
+  ORBIT
+  ARC
+  CRANE_UP
+  CRANE_DOWN
+  BOOM_UP
+  BOOM_DOWN
+  HANDHELD
+  STEADICAM
+  GIMBAL
+  ZOOM_IN
+  ZOOM_OUT
+  WHIP_PAN
+  DRONE_RISE
+  DRONE_DESCEND
+  DRONE_FORWARD
+  DRONE_BACKWARD
+  DOLLY_ZOOM
+  POV
+  FIRST_PERSON
+  CUSTOM
+}
+
+enum CameraSpeed {
+  VERY_SLOW
+  SLOW
+  MEDIUM
+  FAST
+  VERY_FAST
+}
+
+enum CameraRig {
+  STATIC_TRIPOD
+  HANDHELD
+  STEADICAM
+  GIMBAL
+  DOLLY
+  CRANE
+  JIB
+  DRONE
+  SHOULDER
+  POV
+  UNKNOWN
+}
+
+enum CameraAngle {
+  EYE_LEVEL
+  LOW_ANGLE
+  HIGH_ANGLE
+  BIRDS_EYE
+  WORMS_EYE
+  DUTCH_ANGLE
+  OVERHEAD
+  GROUND_LEVEL
+}
+
+enum CameraFraming {
+  EXTREME_WIDE
+  WIDE
+  FULL
+  MEDIUM_WIDE
+  MEDIUM
+  MEDIUM_CLOSE_UP
+  CLOSE_UP
+  EXTREME_CLOSE_UP
+  TWO_SHOT
+  OVER_SHOULDER
+  INSERT
+  CUTAWAY
+  POV_FRAME
+}
+
+enum FocusMode {
+  FIXED
+  RACK_FOCUS
+  FOLLOW_FOCUS
+  DEEP_FOCUS
+  SOFT_FOCUS
+}
+
+enum DepthOfField {
+  SHALLOW
+  MEDIUM
+  DEEP
+}
+
+enum MovementPurpose {
+  ESTABLISH_LOCATION
+  FOLLOW_CHARACTER
+  FOLLOW_ACTION
+  BUILD_TENSION
+  CREATE_INTIMACY
+  CREATE_DISTANCE
+  SHOW_SCALE
+  REVEAL_INFORMATION
+  REVEAL_CHARACTER
+  REVEAL_OBJECT
+  EMPHASIZE_EMOTION
+  CREATE_DISORIENTATION
+  TRANSITION
+}
+
 model VideoShot {
-  id                   String          @id @default(uuid())
+  id                   String            @id @default(uuid())
   sceneId              String
-  scene                VideoScene      @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  scene                VideoScene        @relation(fields: [sceneId], references: [id], onDelete: Cascade)
   shotNumber           Int
   shotType             String?
   sourceTextSegment    String?
   action               String?
+  /// Legacy free-text camera summary (kept for display compatibility)
   camera               String?
+  /// Structured first-class cinematography
+  cameraMovement       CameraMovement?
+  cameraSpeed          CameraSpeed?
+  cameraDirection      String?
+  cameraAngle          CameraAngle?
+  cameraRig            CameraRig?
   lens                 String?
-  movement             String?
+  focalLength          String?
+  framing              CameraFraming?
   composition          String?
+  focusMode            FocusMode?
+  depthOfField         DepthOfField?
+  movementPurpose      MovementPurpose?
+  /// Legacy free-text movement summary
+  movement             String?
   lighting             String?
   durationSec          Float?
   startOffsetSec       Float?
   visualPrompt         String?
   negativePrompt       String?
-  status               VideoShotStatus @default(PENDING)
+  status               VideoShotStatus   @default(PENDING)
   videoUrl             String?
   providerGenerationId String?
   errorMessage         String?
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
 
   @@unique([sceneId, shotNumber])
   @@index([sceneId])
+  @@index([cameraMovement])
   @@map("video_shots")
 }
 
@@ -748,4 +878,20 @@ model SubtitleCue {
   @@unique([sceneId, sequence])
   @@index([sceneId])
   @@map("subtitle_cues")
+}
+
+/// Word-level timestamp from narration audio (when provider supports it).
+model WordTimestamp {
+  id        String     @id @default(uuid())
+  sceneId   String
+  scene     VideoScene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  word      String
+  startMs   Int
+  endMs     Int
+  index     Int
+  createdAt DateTime   @default(now())
+
+  @@unique([sceneId, index])
+  @@index([sceneId])
+  @@map("word_timestamps")
 }

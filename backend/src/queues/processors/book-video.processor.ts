@@ -122,12 +122,19 @@ export async function processBookVideoJob(job: Job): Promise<void> {
       const srtKey = await storageService.uploadBuffer(Buffer.from(srt, 'utf-8'), 'application/x-subrip', `book-video/${videoProjectId}/final`);
       const vttKey = await storageService.uploadBuffer(Buffer.from(vtt, 'utf-8'), 'text/vtt', `book-video/${videoProjectId}/final`);
       const assKey = await storageService.uploadBuffer(Buffer.from(ass, 'utf-8'), 'text/plain', `book-video/${videoProjectId}/final`);
+      // Never present a single scene as the complete film except as explicit emergency preview
+      const isCompleteFilm = ffmpegOk && rendered.length === scenes.filter((s) => s.status !== 'FAILED').length;
       await videoProjectRepository.update(videoProjectId, {
-        finalVideoUrl: rendered[0].videoUrl, cleanVideoUrl: rendered[0].videoUrl,
-        srtUrl: srtKey, vttUrl: vttKey, assUrl: assKey, progress: 100, status: 'COMPLETED',
-        errorMessage: failed.length
-          ? `${failed.length} scene(s) failed; FFmpeg unavailable — soft subs only`
-          : ffmpegOk ? null : 'FFmpeg unavailable — soft subs only; install ffmpeg for full concat',
+        finalVideoUrl: isCompleteFilm ? rendered[0].videoUrl : null,
+        cleanVideoUrl: isCompleteFilm ? rendered[0].videoUrl : null,
+        srtUrl: srtKey, vttUrl: vttKey, assUrl: assKey,
+        progress: isCompleteFilm ? 100 : 95,
+        status: isCompleteFilm ? 'COMPLETED' : 'FAILED',
+        errorMessage: !ffmpegOk
+          ? 'FFmpeg unavailable — cannot assemble multi-scene film. Soft subtitle files saved. Install ffmpeg and retry render.'
+          : failed.length
+            ? `${failed.length} scene(s) failed; ${rendered.length} rendered. Retry failed scenes then re-render.`
+            : 'Assembly incomplete',
       });
       break;
     }
