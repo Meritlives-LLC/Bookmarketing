@@ -24,6 +24,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "worker:audit": "tsx src/workers/scraper.worker.ts",
     "worker:ai": "tsx src/workers/ai.worker.ts",
+    "worker:book-video": "tsx src/workers/book-video.worker.ts",
     "worker:email": "tsx src/workers/email.worker.ts",
     "worker:analytics": "tsx src/workers/analytics.worker.ts",
     "cron": "tsx src/cron/index.ts"
@@ -58,7 +59,9 @@
     "cloudinary": "^2.5.1",
     "uuid": "9.0.1",
     "date-fns": "3.0.6",
-    "node-cron": "3.0.3"
+    "node-cron": "3.0.3",
+    "pdf-parse": "2.4.5",
+    "mammoth": "1.12.1"
   },
   "devDependencies": {
     "typescript": "5.3.3",

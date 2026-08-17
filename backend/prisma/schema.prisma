@@ -116,6 +116,82 @@ enum Platform {
   PODCAST
 }
 
+// ─────────────────────────────────────────────────────────────
+// BOOK-VIDEO (AI Book-to-Video / Film Studio) ENUMS
+// ─────────────────────────────────────────────────────────────
+
+enum ManuscriptFileType {
+  PDF
+  DOCX
+  TXT
+}
+
+enum ExtractionStatus {
+  PENDING
+  EXTRACTING
+  COMPLETED
+  FAILED
+}
+
+enum VideoProjectStatus {
+  DRAFT
+  ANALYZING
+  PLANNING
+  GENERATING_REFERENCES
+  GENERATING_SCENES
+  GENERATING_VIDEO
+  ASSEMBLING
+  COMPLETED
+  FAILED
+  CANCELED
+  PAUSED
+}
+
+enum VisualStyle {
+  CINEMATIC_REALISM
+  ANIMATION
+  ANIME
+  DOCUMENTARY
+  FANTASY
+  CUSTOM
+}
+
+enum VideoAspectRatio {
+  RATIO_16_9
+  RATIO_9_16
+  RATIO_1_1
+}
+
+enum TextAIProviderName {
+  GROQ
+  LOCAL_FALLBACK
+}
+
+enum VideoProviderName {
+  GEMINI_VEO
+}
+
+enum VideoSceneStatus {
+  PENDING
+  PROMPT_READY
+  GENERATING
+  RENDERED
+  FAILED
+  NEEDS_REVIEW
+}
+
+enum ProviderErrorType {
+  TIMEOUT
+  RATE_LIMIT
+  SAFETY_REJECTION
+  INVALID_PROMPT
+  INVALID_FILE
+  STORAGE_ERROR
+  FFMPEG_ERROR
+  DATABASE_ERROR
+  UNKNOWN
+}
+
 
 // ─────────────────────────────────────────────────────────────
 // MODELS
@@ -215,6 +291,8 @@ model Book {
   audits         Audit[]
   creatives      Creative[]
   calendarEvents CalendarEvent[]
+  manuscript     Manuscript?
+  videoProjects  VideoProject[]
 
   @@index([userId])
   @@map("books")
@@ -352,4 +430,234 @@ model Notification {
 
   @@index([userId])
   @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────────
+// BOOK-VIDEO (AI Book-to-Video / Film Studio) MODELS
+// ─────────────────────────────────────────────────────────────
+
+/// One manuscript per Book. The immutable, authoritative source text —
+/// never overwritten in place; a re-upload replaces it wholesale via
+/// service-level delete+recreate so extractionStatus/history stays honest.
+model Manuscript {
+  id                     String            @id @default(uuid())
+  bookId                 String            @unique
+  book                   Book              @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  originalFileName       String
+  fileType               ManuscriptFileType
+  fileSize               Int
+  fileUrl                String
+  extractionStatus       ExtractionStatus  @default(PENDING)
+  extractedWordCount     Int?
+  extractedCharacterCount Int?
+  processingError        String?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  chapters      Chapter[]
+  videoProjects VideoProject[]
+
+  @@index([bookId])
+  @@index([extractionStatus])
+  @@map("manuscripts")
+}
+
+/// Segmented chapters detected from a Manuscript's extracted text.
+/// sourceText is the exact, immutable slice of the manuscript for this chapter.
+model Chapter {
+  id                  String   @id @default(uuid())
+  manuscriptId        String
+  manuscript          Manuscript @relation(fields: [manuscriptId], references: [id], onDelete: Cascade)
+  chapterNumber       Int
+  title               String?
+  sourceText          String
+  wordCount           Int
+  startPosition        Int
+  endPosition          Int
+  extractionMetadata  Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  videoScenes VideoScene[]
+
+  @@unique([manuscriptId, chapterNumber])
+  @@index([manuscriptId])
+  @@map("chapters")
+}
+
+/// A single book-to-video production run. Resumable state machine driven by `status`.
+model VideoProject {
+  id               String              @id @default(uuid())
+  bookId           String
+  book             Book                @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  manuscriptId     String
+  manuscript       Manuscript          @relation(fields: [manuscriptId], references: [id], onDelete: Restrict)
+  name             String
+  status           VideoProjectStatus  @default(DRAFT)
+  aiProvider       TextAIProviderName  @default(GROQ)
+  aiModel          String?
+  videoProviderName VideoProviderName  @default(GEMINI_VEO)
+  videoModel       String?
+  visualStyle      VisualStyle         @default(CINEMATIC_REALISM)
+  narrationVoice   String?
+  aspectRatio      VideoAspectRatio    @default(RATIO_16_9)
+  resolution       String?
+  narrationWordsPerMinute Int          @default(150)
+  totalChapters    Int                 @default(0)
+  totalScenes      Int                 @default(0)
+  completedScenes  Int                 @default(0)
+  progress         Float               @default(0)
+  finalVideoUrl    String?
+  thumbnailUrl     String?
+  errorMessage     String?
+  pausedAt         DateTime?
+  canceledAt       DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  filmBible  FilmBible?
+  characters VideoCharacter[]
+  locations  VideoLocation[]
+  props      VideoProp[]
+  scenes     VideoScene[]
+
+  @@index([bookId])
+  @@index([manuscriptId])
+  @@index([status])
+  @@map("video_projects")
+}
+
+/// Persistent source-of-truth production bible for a VideoProject.
+/// Structured JSON fields per spec §6; characters/locations/props are separate models.
+model FilmBible {
+  id                        String       @id @default(uuid())
+  videoProjectId            String       @unique
+  videoProject              VideoProject @relation(fields: [videoProjectId], references: [id], onDelete: Cascade)
+  premise                   String?
+  themes                    Json?
+  genre                     String?
+  tone                      String?
+  visualStyleNotes          String?
+  cinematography            Json?
+  colorLanguage             Json?
+  lighting                  Json?
+  cameraLanguage            Json?
+  historicalPeriod          String?
+  geography                 Json?
+  worldRules                Json?
+  narrativeRules            Json?
+  characterConsistencyRules Json?
+  locationConsistencyRules  Json?
+  timeline                  Json?
+  rawAnalysis                Json?
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
+
+  @@map("film_bibles")
+}
+
+/// Canonical character profile. AI must mark unknown fields as null, never invent.
+model VideoCharacter {
+  id                  String       @id @default(uuid())
+  videoProjectId      String
+  videoProject        VideoProject @relation(fields: [videoProjectId], references: [id], onDelete: Cascade)
+  name                String
+  aliases             String[]     @default([])
+  age                 String?
+  gender              String?
+  physicalAppearance  String?
+  clothing            String?
+  personality         String?
+  role                String?
+  characterArc        String?
+  referenceImageUrl   String?
+  negativePrompt      String?
+  continuityNotes     String?
+  isFactUnknown       Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([videoProjectId])
+  @@map("video_characters")
+}
+
+/// Canonical location profile for continuity across scenes.
+model VideoLocation {
+  id                  String       @id @default(uuid())
+  videoProjectId      String
+  videoProject        VideoProject @relation(fields: [videoProjectId], references: [id], onDelete: Cascade)
+  name                String
+  description         String?
+  architecture        String?
+  environment         String?
+  timePeriod          String?
+  weatherPatterns     String?
+  lightingRules       String?
+  visualDescription   String?
+  referenceImageUrl   String?
+  continuityNotes     String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([videoProjectId])
+  @@map("video_locations")
+}
+
+/// Recurring prop/object with persistent visual description.
+model VideoProp {
+  id                  String       @id @default(uuid())
+  videoProjectId      String
+  videoProject        VideoProject @relation(fields: [videoProjectId], references: [id], onDelete: Cascade)
+  name                String
+  description         String?
+  visualDescription   String?
+  referenceImageUrl   String?
+  continuityNotes     String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([videoProjectId])
+  @@map("video_props")
+}
+
+/// Individual filmable scene. sourceText is the exact manuscript excerpt;
+/// narrationText defaults to sourceText and must never silently diverge (§14).
+model VideoScene {
+  id                    String            @id @default(uuid())
+  videoProjectId        String
+  videoProject          VideoProject      @relation(fields: [videoProjectId], references: [id], onDelete: Cascade)
+  chapterId             String
+  chapter               Chapter           @relation(fields: [chapterId], references: [id], onDelete: Restrict)
+  sceneNumber           Int
+  sourceText            String
+  narrationText         String
+  summary               String?
+  characters            String[]          @default([])
+  location              String?
+  props                 String[]          @default([])
+  action                String?
+  emotionalBeat         String?
+  cameraPlan            String?
+  visualPrompt          String?
+  negativePrompt        String?
+  estimatedDurationSec  Float?
+  status                VideoSceneStatus  @default(PENDING)
+  provider              VideoProviderName?
+  providerGenerationId  String?
+  videoUrl              String?
+  audioUrl              String?
+  subtitleUrl           String?
+  thumbnailUrl          String?
+  lastErrorType         ProviderErrorType?
+  errorMessage          String?
+  retryCount            Int               @default(0)
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@unique([videoProjectId, chapterId, sceneNumber])
+  @@index([videoProjectId])
+  @@index([chapterId])
+  @@index([status])
+  @@index([providerGenerationId])
+  @@map("video_scenes")
 }

@@ -22,6 +22,12 @@ module.exports = {
       env: { NODE_ENV: 'production' },
     },
     {
+      name: 'bookmarketingos-worker-book-video',
+      script: 'dist/workers/book-video.worker.js',
+      instances: 1,
+      env: { NODE_ENV: 'production' },
+    },
+    {
       name: 'bookmarketingos-worker-email',
       script: 'dist/workers/email.worker.js',
       instances: 1,
