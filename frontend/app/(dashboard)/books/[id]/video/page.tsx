@@ -26,7 +26,7 @@ export default function BookVideoStudioPage({ params }: { params: { id: string }
   const [progress, setProgress] = useState<Progress | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [editingSceneId, setEditingSceneId] = useState<string | null>(null);
   const [editPrompt, setEditPrompt] = useState("");
