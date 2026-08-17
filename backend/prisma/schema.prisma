@@ -140,11 +140,35 @@ enum VideoProjectStatus {
   GENERATING_REFERENCES
   GENERATING_SCENES
   GENERATING_VIDEO
+  GENERATING_SUBTITLES
   ASSEMBLING
   COMPLETED
   FAILED
   CANCELED
   PAUSED
+}
+
+enum SubtitleMode {
+  OFF
+  SOFT
+  BURNED_IN
+}
+
+enum SubtitleStyle {
+  CLASSIC
+  MODERN
+  CINEMATIC
+  MINIMAL
+  BOLD
+  CUSTOM
+}
+
+enum VideoShotStatus {
+  PENDING
+  PROMPT_READY
+  GENERATING
+  RENDERED
+  FAILED
 }
 
 enum VisualStyle {
@@ -503,11 +527,20 @@ model VideoProject {
   aspectRatio      VideoAspectRatio    @default(RATIO_16_9)
   resolution       String?
   narrationWordsPerMinute Int          @default(150)
+  subtitleEnabled  Boolean             @default(true)
+  subtitleMode     SubtitleMode        @default(SOFT)
+  subtitleStyle    SubtitleStyle       @default(CINEMATIC)
+  subtitleConfig   Json?
   totalChapters    Int                 @default(0)
   totalScenes      Int                 @default(0)
   completedScenes  Int                 @default(0)
   progress         Float               @default(0)
   finalVideoUrl    String?
+  cleanVideoUrl    String?
+  subtitleVideoUrl String?
+  srtUrl           String?
+  vttUrl           String?
+  assUrl           String?
   thumbnailUrl     String?
   errorMessage     String?
   pausedAt         DateTime?
@@ -641,6 +674,10 @@ model VideoScene {
   visualPrompt          String?
   negativePrompt        String?
   estimatedDurationSec  Float?
+  actualDurationSec     Float?
+  narrationDurationSec  Float?
+  sourceStart           Int?
+  sourceEnd             Int?
   status                VideoSceneStatus  @default(PENDING)
   provider              VideoProviderName?
   providerGenerationId  String?
@@ -654,10 +691,61 @@ model VideoScene {
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
 
+  shots         VideoShot[]
+  subtitleCues  SubtitleCue[]
+
   @@unique([videoProjectId, chapterId, sceneNumber])
   @@index([videoProjectId])
   @@index([chapterId])
   @@index([status])
   @@index([providerGenerationId])
   @@map("video_scenes")
+}
+
+model VideoShot {
+  id                   String          @id @default(uuid())
+  sceneId              String
+  scene                VideoScene      @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  shotNumber           Int
+  shotType             String?
+  sourceTextSegment    String?
+  action               String?
+  camera               String?
+  lens                 String?
+  movement             String?
+  composition          String?
+  lighting             String?
+  durationSec          Float?
+  startOffsetSec       Float?
+  visualPrompt         String?
+  negativePrompt       String?
+  status               VideoShotStatus @default(PENDING)
+  videoUrl             String?
+  providerGenerationId String?
+  errorMessage         String?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  @@unique([sceneId, shotNumber])
+  @@index([sceneId])
+  @@map("video_shots")
+}
+
+model SubtitleCue {
+  id             String     @id @default(uuid())
+  sceneId        String
+  scene          VideoScene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  sequence       Int
+  text           String
+  startTimeMs    Int
+  endTimeMs      Int
+  startWordIndex Int?
+  endWordIndex   Int?
+  speakerLabel   String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([sceneId, sequence])
+  @@index([sceneId])
+  @@map("subtitle_cues")
 }

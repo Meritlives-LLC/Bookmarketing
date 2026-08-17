@@ -12,6 +12,7 @@ import {
   Calendar,
   Trash2,
   Play,
+  Clapperboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -170,6 +171,11 @@ export default function BookDetailPage({
             <Link href={`/creatives?bookId=${id}`}>
               <Button variant="outline" className="gap-2">
                 <Sparkles className="h-4 w-4" /> Creatives
+              </Button>
+            </Link>
+            <Link href={`/books/${id}/video`}>
+              <Button variant="outline" className="gap-2">
+                <Clapperboard className="h-4 w-4" /> Create AI Video
               </Button>
             </Link>
             <Button variant="ghost" size="icon" onClick={removeBook} title="Delete">

@@ -53,3 +53,33 @@ export interface ManuscriptJobData {
   manuscriptId: string;
   bookId: string;
 }
+
+
+export interface AnalyzeProjectJobData { videoProjectId: string; bookId: string; userId: string; }
+export interface PlanScenesJobData { videoProjectId: string; bookId: string; chapterId?: string; }
+export interface GenerateReferencesJobData { videoProjectId: string; force?: boolean; }
+export interface GenerateSceneVideoJobData { videoProjectId: string; sceneId: string; }
+export interface GenerateSubtitlesJobData { videoProjectId: string; sceneId?: string; }
+export interface AssembleJobData { videoProjectId: string; chapterId?: string; }
+export interface CreateVideoProjectInput {
+  name?: string; visualStyle?: string; aspectRatio?: string; resolution?: string; videoModel?: string;
+  subtitleEnabled?: boolean; subtitleMode?: string; subtitleStyle?: string;
+  subtitleConfig?: Record<string, unknown>; narrationWordsPerMinute?: number;
+}
+export interface VideoProjectProgress {
+  projectId: string; status: string; progress: number; totalChapters: number; totalScenes: number;
+  completedScenes: number; currentChapter?: number | null; currentScene?: number | null;
+  currentShot?: number | null; stageLabel: string; errorMessage?: string | null;
+}
+export interface VideoGenerationRequest {
+  prompt: string; negativePrompt?: string; durationSec?: number; aspectRatio?: string;
+  resolution?: string; referenceImageUrls?: string[]; model?: string;
+}
+export interface VideoGenerationResult {
+  providerGenerationId: string; status: "queued" | "processing" | "completed" | "failed";
+  videoUrl?: string; thumbnailUrl?: string; errorMessage?: string; errorType?: string;
+}
+export interface SubtitleCueDraft {
+  sequence: number; text: string; startTimeMs: number; endTimeMs: number;
+  startWordIndex?: number | null; endWordIndex?: number | null; speakerLabel?: string | null;
+}
