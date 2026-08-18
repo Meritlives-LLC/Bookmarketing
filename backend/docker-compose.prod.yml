@@ -64,6 +64,21 @@ services:
       redis:
         condition: service_healthy
 
+  # Book-to-film + manuscript extraction (BullMQ: book-video, book-manuscript)
+  worker-book-video:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/book-video.worker.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   worker-ai:
     build:
       context: .

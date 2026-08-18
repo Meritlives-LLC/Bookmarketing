@@ -17,7 +17,7 @@ RUN npm run build
 FROM base AS runtime
 ENV NODE_ENV=production
 
-RUN apk add --no-cache curl \
+RUN apk add --no-cache curl ffmpeg \
   && addgroup -S app && adduser -S app -G app
 
 # IMPORTANT: copy node_modules from the `build` stage, not `deps`.

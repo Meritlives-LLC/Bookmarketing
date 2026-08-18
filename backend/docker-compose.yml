@@ -44,6 +44,18 @@ services:
       - postgres
       - redis
 
+
+  # Book-to-film + manuscript extraction (book-video, book-manuscript queues)
+  worker-book-video:
+    build:
+      context: .
+      target: build
+    command: npm run worker:book-video
+    env_file: .env
+    depends_on:
+      - postgres
+      - redis
+
   worker-ai:
     build:
       context: .
