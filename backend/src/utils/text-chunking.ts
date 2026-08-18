@@ -225,6 +225,3 @@ export function splitDurationIntoShots(
   }
   return durations;
 }
-
-/** @deprecated Prefer segmentChapterDeterministic from deterministic-scene-segmentation */
-export { segmentChapterDeterministic, repairCoverageOrFallback, assertFullCoverage } from './deterministic-scene-segmentation';

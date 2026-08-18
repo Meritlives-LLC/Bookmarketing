@@ -53,7 +53,7 @@ function toPlanScenes(
   characters: string[],
   location: string | null
 ) {
-  return segs.map((seg) => ({
+  return segs.map((seg: any) => ({
     sceneNumber: seg.sceneNumber,
     sourceStart: seg.sourceStart,
     sourceEnd: seg.sourceEnd,
@@ -64,7 +64,7 @@ function toPlanScenes(
     action: null as string | null,
     emotionalBeat: null as string | null,
     estimatedDurationSec: seg.estimatedDurationSec,
-    shots: seg.shots.map((sh) => ({
+    shots: seg.shots.map((sh: any) => ({
       shotNumber: sh.shotNumber,
       shotType: sh.shotType,
       sourceTextSegment: sh.sourceTextSegment,
@@ -198,7 +198,7 @@ export const scenePlannerService = {
         const end = Math.max(start, Math.min(proposal.sourceEnd, chapter.sourceText.length));
         const sourceText = chapter.sourceText.slice(start, end);
         if (!sourceText.trim()) continue;
-        const matchedChars = characters.filter((c) => proposal.characters.some((n) => n.toLowerCase() === c.name.toLowerCase()));
+        const matchedChars = characters.filter((c) => proposal.characters.some((n: string) => n.toLowerCase() === c.name.toLowerCase()));
         const matchedLoc = locations.find((l) => proposal.location && l.name.toLowerCase() === proposal.location.toLowerCase()) ?? null;
         const visualPrompt = buildVisualPrompt({ sourceText, filmStyle, characters: matchedChars, location: matchedLoc, action: proposal.action, shotType: proposal.shots?.[0]?.shotType });
         const wordCount = sourceText.split(/\s+/).filter(Boolean).length;
@@ -217,12 +217,12 @@ export const scenePlannerService = {
         let rawShots = proposal.shots?.length
           ? proposal.shots
           : [{ shotNumber: 1, shotType: 'medium', durationSec: estimatedDurationSec, startOffsetSec: 0, visualPrompt }];
-        const expanded: typeof rawShots = [];
+        const expanded: Array<Record<string, any>> = [];
         let globalOff = 0;
         let shotNum = 1;
         for (const rs of rawShots) {
           const durs = splitDurationIntoShots(rs.durationSec ?? estimatedDurationSec, 8, 2);
-          const seg = rs.sourceTextSegment || sourceText;
+          const seg = (rs as any).sourceTextSegment || sourceText;
           for (const d of durs) {
             expanded.push({
               ...rs,
@@ -230,7 +230,7 @@ export const scenePlannerService = {
               durationSec: d,
               startOffsetSec: globalOff,
               sourceTextSegment: seg,
-              visualPrompt: rs.visualPrompt ?? visualPrompt,
+              visualPrompt: (rs as any).visualPrompt ?? visualPrompt,
             });
             globalOff += d;
           }
@@ -276,30 +276,32 @@ export const scenePlannerService = {
           });
           await prisma.videoShot.create({
             data: {
-              sceneId: scene.id, shotNumber: shot.shotNumber, shotType: shot.shotType ?? camPlan.framing,
-              sourceTextSegment: shot.sourceTextSegment ?? sourceText, action: shot.action ?? null,
-              camera: shot.camera ?? null, lens: shot.lens ?? shot.focalLength ?? null,
-              focalLength: (shot as any).focalLength ?? shot.lens ?? null,
-              movement: shot.movement ?? null,
-              cameraMovement: (shot as any).cameraMovement ?? null,
-              cameraSpeed: (shot as any).cameraSpeed ?? null,
+              sceneId: scene.id,
+              shotNumber: shot.shotNumber,
+              shotType: shot.shotType ?? camPlan.framing,
+              sourceTextSegment: shot.sourceTextSegment ?? sourceText,
+              action: shot.action ?? null,
+              camera: camPlan.cameraSummary,
+              movement: camPlan.movementSummary,
+              lens: camPlan.lens,
+              focalLength: camPlan.focalLength,
+              cameraMovement: camPlan.cameraMovement,
+              cameraSpeed: camPlan.cameraSpeed,
               cameraDirection: (shot as any).cameraDirection ?? null,
-              cameraAngle: (shot as any).cameraAngle ?? null,
-              cameraRig: (shot as any).cameraRig ?? null,
-              framing: (shot as any).framing ?? null,
-              focusMode: (shot as any).focusMode ?? null,
-              depthOfField: (shot as any).depthOfField ?? null,
-              movementPurpose: (shot as any).movementPurpose ?? null,
-              composition: shot.composition ?? null, lighting: shot.lighting ?? null,
-              durationSec: shot.durationSec ?? estimatedDurationSec, startOffsetSec: shot.startOffsetSec ?? 0,
-              visualPrompt: compiled.prompt, negativePrompt: compiled.negativePrompt, status: 'PROMPT_READY',
-              camera: camPlan.cameraSummary, movement: camPlan.movementSummary,
-              cameraMovement: camPlan.cameraMovement, cameraSpeed: camPlan.cameraSpeed,
-              cameraAngle: camPlan.cameraAngle, cameraRig: camPlan.cameraRig,
-              lens: camPlan.lens, focalLength: camPlan.focalLength, framing: camPlan.framing,
-              composition: camPlan.composition, focusMode: camPlan.focusMode,
-              depthOfField: camPlan.depthOfField, movementPurpose: camPlan.movementPurpose,
+              cameraAngle: camPlan.cameraAngle,
+              cameraRig: camPlan.cameraRig,
+              framing: camPlan.framing,
+              focusMode: camPlan.focusMode,
+              depthOfField: camPlan.depthOfField,
+              movementPurpose: camPlan.movementPurpose,
               focusTarget: (shot as any).focusTarget ?? null,
+              composition: camPlan.composition,
+              lighting: (shot as any).lighting ?? null,
+              durationSec: shot.durationSec ?? estimatedDurationSec,
+              startOffsetSec: shot.startOffsetSec ?? 0,
+              visualPrompt: compiled.prompt,
+              negativePrompt: compiled.negativePrompt,
+              status: 'PROMPT_READY',
             },
           });
         }

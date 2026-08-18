@@ -43,9 +43,9 @@ const FilmBibleSchema = z.object({
   timeline: z.array(z.unknown()).nullable().optional(),
 });
 
-async function callStructuredJson<T>(systemPrompt: string, userPrompt: string, schema: z.ZodType<T>, label: string): Promise<T> {
+async function callStructuredJson<T extends z.ZodTypeAny>(systemPrompt: string, userPrompt: string, schema: T, label: string): Promise<z.output<T>> {
   const apiKey = config.ai.groq.apiKey;
-  if (!apiKey) { logger.warn(`No Groq key — minimal local analysis for ${label}`); return schema.parse({}); }
+  if (!apiKey) { logger.warn(`No Groq key — minimal local analysis for ${label}`); return schema.parse({}) as z.output<T>; }
   const res = await fetch(`${config.ai.groq.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -69,42 +69,38 @@ export const bookVideoAnalysisService = {
     if (!project.manuscript?.chapters?.length) throw AppError.badRequest('Manuscript has no chapters');
     await videoProjectRepository.updateStatus(videoProjectId, 'ANALYZING', { progress: 5, errorMessage: null });
     const chapters = project.manuscript.chapters;
-    const chapterAnalyses: z.infer<typeof ChapterAnalysisSchema>[] = [];
+    const chapterAnalyses: Array<z.infer<typeof ChapterAnalysisSchema>> = [];
     for (let i = 0; i < chapters.length; i++) {
       const chapter = chapters[i];
-      // Hierarchical chunking — every character of the chapter is analyzed; nothing discarded.
       const chunks = chunkTextHierarchical(chapter.sourceText, 8000);
       try {
-        const partials: z.infer<typeof ChapterAnalysisSchema>[] = [];
+        const partials: Array<z.output<typeof ChapterAnalysisSchema>> = [];
         for (const chunk of chunks) {
           const partial = await callStructuredJson(
-            'You are a film production analyst. Extract ONLY what appears in this text chunk. Do NOT invent facts. Return JSON with characters, locations, props, events, themes, tone.',
-            `Chapter ${chapter.chapterNumber}${chapter.title ? `: ${chapter.title}` : ''} — chunk ${chunk.index + 1}/${chunks.length} (chars ${chunk.start}-${chunk.end} of ${chapter.sourceText.length})\n\n${chunk.text}`,
+            'You are a film production analyst. Extract ONLY what appears in this text chunk. Do NOT invent facts. Return JSON.',
+            `Chapter ${chapter.chapterNumber}${chapter.title ? `: ${chapter.title}` : ''} — chunk ${chunk.index + 1}/${chunks.length}\n\n${chunk.text}`,
             ChapterAnalysisSchema,
             `chapter-${chapter.chapterNumber}-chunk-${chunk.index}`
           );
           partials.push(partial);
         }
-        // Merge chunk analyses (dedupe by name case-insensitively)
         const mergeByName = <T extends { name: string }>(lists: T[][]): T[] => {
           const map = new Map<string, T>();
-          for (const list of lists) {
-            for (const item of list) {
-              const key = item.name.toLowerCase();
-              if (!map.has(key)) map.set(key, item);
-            }
+          for (const list of lists) for (const item of list) {
+            const key = item.name.toLowerCase();
+            if (!map.has(key)) map.set(key, item);
           }
           return [...map.values()];
         };
-        const analysis: z.infer<typeof ChapterAnalysisSchema> = {
+                const analysis = {
           chapterNumber: chapter.chapterNumber,
-          characters: mergeByName(partials.map((p) => p.characters)),
-          locations: mergeByName(partials.map((p) => p.locations)),
-          props: mergeByName(partials.map((p) => p.props)),
-          events: partials.flatMap((p) => p.events),
-          themes: [...new Set(partials.flatMap((p) => p.themes))],
-          tone: partials.find((p) => p.tone)?.tone ?? null,
-        };
+          characters: mergeByName(partials.map((p) => p.characters ?? [])),
+          locations: mergeByName(partials.map((p) => p.locations ?? [])),
+          props: mergeByName(partials.map((p) => p.props ?? [])),
+          events: partials.flatMap((p) => p.events ?? []),
+          themes: [...new Set(partials.flatMap((p) => p.themes ?? []))],
+          tone: (partials.find((p) => p.tone)?.tone ?? null) as string | null,
+        } as z.infer<typeof ChapterAnalysisSchema>;
         chapterAnalyses.push(analysis);
         for (const c of analysis.characters) {
           await videoCharacterRepository.upsertByName(videoProjectId, c.name, {

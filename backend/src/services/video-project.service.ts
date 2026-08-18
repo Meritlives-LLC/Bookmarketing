@@ -14,6 +14,7 @@ import {
 import { getVideoProvider } from './video-provider.service';
 import { compileShotPrompt, reasonCameraPlan, validateCameraPlan, normalizeShotCamera, validateCameraContinuity, suggestContinuityFix, type ShotCameraPlan } from '../cinematography';
 import { shotPromptCompilerService } from './shot-prompt-compiler.service';
+import { ffmpegAssemblyService } from './ffmpeg-assembly.service';
 import { storageService } from './storage.service';
 
 const STAGE_LABELS: Record<string, string> = {
@@ -42,7 +43,7 @@ export const videoProjectService = {
       subtitleEnabled: input.subtitleEnabled ?? true,
       subtitleMode: (input.subtitleMode as SubtitleMode) || SubtitleMode.SOFT,
       subtitleStyle: (input.subtitleStyle as SubtitleStyle) || SubtitleStyle.CINEMATIC,
-      subtitleConfig: input.subtitleConfig, narrationWordsPerMinute: input.narrationWordsPerMinute ?? 150,
+      subtitleConfig: input.subtitleConfig as any, narrationWordsPerMinute: input.narrationWordsPerMinute ?? 150,
       totalChapters: chapterCount,
     });
   },
@@ -292,7 +293,6 @@ export const videoProjectService = {
     );
 
     // Recompile prompt from fixed camera only
-    const { shotPromptCompilerService } = await import('./shot-prompt-compiler.service');
     const compiled = shotPromptCompilerService.compile({
       sourceTextSegment: shot.sourceTextSegment || shot.scene.sourceText,
       durationSec: shot.durationSec,
@@ -551,7 +551,6 @@ export const videoProjectService = {
     }
 
     // Assemble shot clips → scene master
-    const { ffmpegAssemblyService } = await import('./ffmpeg-assembly.service');
     const ffmpegOk = await ffmpegAssemblyService.isAvailable();
     let sceneVideoUrl = rendered[0].videoUrl!;
     let actualDuration = rendered.reduce((s, sh) => s + (sh.durationSec || 0), 0);

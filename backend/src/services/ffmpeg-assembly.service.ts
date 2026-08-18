@@ -109,7 +109,6 @@ async function downloadToFile(urlOrKey: string, dest: string): Promise<void> {
   if (!res.ok) throw new Error(`Failed to download clip: ${res.status}`);
   const body = res.body;
   if (!body) throw new Error('Empty response body');
-  // @ts-expect-error web stream
   await pipeline(Readable.fromWeb(body as any), createWriteStream(dest));
 }
 

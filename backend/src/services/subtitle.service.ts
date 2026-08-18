@@ -78,16 +78,27 @@ export const subtitleService = {
     const scene = await prisma.videoScene.findUnique({ where: { id: sceneId } });
     if (!scene) throw AppError.notFound('Scene not found');
     const text = scene.narrationText || scene.sourceText;
-    // Timing priority: 1) word timestamps  2) actual narration/audio duration  3) estimated
-    const wordTs = await prisma.wordTimestamp.findMany({
-      where: { sceneId },
-      orderBy: { index: 'asc' },
-    });
     const project = await prisma.videoProject.findUnique({ where: { id: scene.videoProjectId } });
     const cfg = (project?.subtitleConfig as Record<string, number>) || {};
+    const durationSec =
+      scene.narrationDurationSec ??
+      scene.actualDurationSec ??
+      scene.estimatedDurationSec ??
+      Math.max(4, text.split(/\s+/).filter(Boolean).length / 2.5);
+    const totalMs = Math.round(durationSec * 1000);
+
     let cues: SubtitleCueDraft[];
+    let wordTs: Array<{ word: string; startMs: number; endMs: number; index: number }> = [];
+    try {
+      wordTs = await (prisma as any).wordTimestamp.findMany({
+        where: { sceneId },
+        orderBy: { index: 'asc' },
+      });
+    } catch {
+      wordTs = [];
+    }
+
     if (wordTs.length > 0) {
-      // Build cues from real word timestamps — pack into readable segments without changing words
       const maxChars = cfg.maxCharsPerLine ?? DEFAULT_MAX_CHARS;
       const maxLines = cfg.maxLines ?? DEFAULT_MAX_LINES;
       const limit = maxChars * maxLines;
@@ -113,13 +124,6 @@ export const subtitleService = {
       }
       flush();
     } else {
-      const durationSec =
-        scene.narrationDurationSec ??
-        scene.actualDurationSec ??
-        scene.estimatedDurationSec ??
-        Math.max(4, text.split(/\s+/).length / 2.5);
-      // Only use estimated when actual durations are absent
-      const totalMs = Math.round(durationSec * 1000);
       cues = splitIntoCues(text, totalMs, {
         maxChars: cfg.maxCharsPerLine ?? DEFAULT_MAX_CHARS,
         maxLines: cfg.maxLines ?? DEFAULT_MAX_LINES,
@@ -127,6 +131,7 @@ export const subtitleService = {
         maxMs: cfg.maxDurationMs ?? DEFAULT_MAX_MS,
       });
     }
+
     const errors = validateCues(cues, totalMs);
     if (errors.length) logger.warn('Subtitle validation issues', { sceneId, errors });
     await prisma.subtitleCue.deleteMany({ where: { sceneId } });
