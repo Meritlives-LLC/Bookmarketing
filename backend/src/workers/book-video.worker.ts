@@ -4,10 +4,15 @@ import { processManuscriptExtractionJob } from '../queues/processors/manuscript.
 import { processBookVideoJob } from '../queues/processors/book-video.processor';
 import { logger } from '../utils/logger';
 import { connectDatabase } from '../config/database';
+import { reconcileStuckBookVideoWork } from './reconcile-book-video';
 
 async function start() {
   const connection = requireBullConnection();
   await connectDatabase();
+  // Resume any Book-to-Film work orphaned by a prior crash/restart before
+  // accepting new jobs, so a project doesn't stay stuck in an in-progress
+  // status indefinitely just because the job that was driving it is gone.
+  await reconcileStuckBookVideoWork();
   const manuscriptWorker = new Worker('book-manuscript', processManuscriptExtractionJob, {
     connection: connection.connection, concurrency: 2,
   });
