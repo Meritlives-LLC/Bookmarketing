@@ -25,6 +25,13 @@ const STAGE_LABELS: Record<string, string> = {
   CANCELED: 'Canceled', PAUSED: 'Paused',
 };
 
+// How long a shot may sit in GENERATING before its providerGenerationId is
+// considered abandoned rather than genuinely in flight. Matches the 60 *
+// 10s provider poll window in pollShotGeneration, so anything within this
+// window is assumed to still have an active poll loop somewhere (or is
+// safely resumable), and anything older is safe to treat as dead and retry.
+const SHOT_GENERATION_STALE_MS = 10 * 60 * 1000;
+
 export const videoProjectService = {
   async create(userId: string, bookId: string, input: CreateVideoProjectInput = {}) {
     const book = await bookRepository.findByIdForUser(bookId, userId);
@@ -89,6 +96,13 @@ export const videoProjectService = {
   async startGeneration(userId: string, projectId: string, opts?: { sceneId?: string }) {
     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
     if (!project) throw AppError.notFound('Video project not found');
+    // Guard against double-submit (double-click, retried request, second
+    // tab): without this, two concurrent calls can both read the same
+    // PROMPT_READY/FAILED scenes before either has updated status, both
+    // charge credits, and both enqueue generation for the same shots.
+    if (project.status === 'GENERATING_VIDEO') {
+      throw AppError.conflict('Video generation is already running for this project', 'PROJECT_BUSY');
+    }
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw AppError.notFound('User not found');
     const scenes = opts?.sceneId
@@ -127,10 +141,21 @@ export const videoProjectService = {
   async regenerateScene(userId: string, sceneId: string) {
     const scene = await videoSceneRepository.findByIdForUser(sceneId, userId);
     if (!scene) throw AppError.notFound('Scene not found');
-    // Reset only failed/pending shots — keep successfully RENDERED shots
+    // Reset failed/pending shots, and any GENERATING shot that's stale
+    // (no recorded start time, or older than the provider poll window) —
+    // but leave a genuinely live GENERATING shot's providerGenerationId
+    // intact so processShotVideo resumes it instead of submitting a
+    // duplicate, paid generation for work that may already be finishing.
+    const staleCutoff = new Date(Date.now() - SHOT_GENERATION_STALE_MS);
     await prisma.videoShot.updateMany({
-      where: { sceneId, status: { in: ['FAILED', 'PENDING', 'PROMPT_READY', 'GENERATING'] } },
-      data: { status: 'PROMPT_READY', errorMessage: null, providerGenerationId: null },
+      where: {
+        sceneId,
+        OR: [
+          { status: { in: ['FAILED', 'PENDING', 'PROMPT_READY'] } },
+          { status: 'GENERATING', OR: [{ generationStartedAt: null }, { generationStartedAt: { lt: staleCutoff } }] },
+        ],
+      },
+      data: { status: 'PROMPT_READY', errorMessage: null, providerGenerationId: null, generationStartedAt: null },
     });
     await videoSceneRepository.updateStatus(sceneId, 'PROMPT_READY', {
       errorMessage: null, providerGenerationId: null, lastErrorType: null,
@@ -146,10 +171,20 @@ export const videoProjectService = {
       include: { scene: true },
     });
     if (!shot) throw AppError.notFound('Shot not found');
-    await prisma.videoShot.update({
-      where: { id: shotId },
-      data: { status: 'PROMPT_READY', errorMessage: null, providerGenerationId: null, videoUrl: null },
-    });
+    const isLiveGeneration =
+      shot.status === 'GENERATING' &&
+      !!shot.providerGenerationId &&
+      !!shot.generationStartedAt &&
+      Date.now() - shot.generationStartedAt.getTime() < SHOT_GENERATION_STALE_MS;
+    if (!isLiveGeneration) {
+      // Only clear provider state when nothing is genuinely in flight to
+      // resume — clearing it under a live generation would orphan a paid,
+      // still-running request and cause processShotVideo to duplicate it.
+      await prisma.videoShot.update({
+        where: { id: shotId },
+        data: { status: 'PROMPT_READY', errorMessage: null, providerGenerationId: null, generationStartedAt: null, videoUrl: null },
+      });
+    }
     // No credit charge on retry
     await this.processShotVideo(shotId);
     // Re-assemble scene from shots after single shot retry
@@ -613,7 +648,7 @@ export const videoProjectService = {
     // clearly stale (no start time recorded, or older than the max wait
     // window below) — that indicates the earlier submission itself likely
     // never completed and is safe to abandon.
-    const STALE_GENERATION_MS = 10 * 60 * 1000; // matches the 60 * 10s poll window below
+    const STALE_GENERATION_MS = SHOT_GENERATION_STALE_MS; // matches the 60 * 10s poll window below
     if (
       shot.status === 'GENERATING' &&
       shot.providerGenerationId &&
