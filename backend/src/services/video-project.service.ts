@@ -585,38 +585,50 @@ export const videoProjectService = {
       return;
     }
 
-    // Assemble shot clips → scene master
+    // Assemble shot clips → scene master. A scene with more than one shot
+    // genuinely needs FFmpeg to concatenate them; if that concat throws,
+    // falling back to shot 1's clip while still marking the scene RENDERED
+    // would silently drop the rest of the scene's shots while reporting
+    // success — the same "claim success without verifying" failure mode as
+    // project-level assembly, just one level down. A single-shot scene has
+    // nothing to concatenate, so its one clip is legitimately the scene.
     const ffmpegOk = await ffmpegAssemblyService.isAvailable();
-    let sceneVideoUrl = rendered[0].videoUrl!;
+    let sceneVideoUrl: string | null = rendered[0].videoUrl!;
     let actualDuration = rendered.reduce((s, sh) => s + (sh.durationSec || 0), 0);
+    let assemblyFailed = false;
 
-    if (ffmpegOk && rendered.length >= 1) {
-      try {
-        const result = await ffmpegAssemblyService.assemble({
-          projectId: `${project.id}/scenes/${sceneId}`,
-          clips: rendered.map((sh) => ({
-            videoUrl: sh.videoUrl!,
-            durationSec: sh.durationSec || 4,
-          })),
-        });
-        sceneVideoUrl = result.cleanVideoKey;
-        if (result.totalDurationSec > 0) actualDuration = result.totalDurationSec;
-      } catch (e) {
-        logger.warn('Scene shot assembly failed — using first shot as temporary scene video', {
-          error: (e as Error).message,
-        });
+    if (rendered.length > 1) {
+      if (ffmpegOk) {
+        try {
+          const result = await ffmpegAssemblyService.assemble({
+            projectId: `${project.id}/scenes/${sceneId}`,
+            clips: rendered.map((sh) => ({
+              videoUrl: sh.videoUrl!,
+              durationSec: sh.durationSec || 4,
+            })),
+          });
+          sceneVideoUrl = result.cleanVideoKey;
+          if (result.totalDurationSec > 0) actualDuration = result.totalDurationSec;
+        } catch (e) {
+          logger.warn('Scene shot assembly failed', { error: (e as Error).message, sceneId });
+          assemblyFailed = true;
+        }
+      } else {
+        assemblyFailed = true;
       }
     }
 
-    await videoSceneRepository.updateStatus(sceneId, failed.length ? 'FAILED' : 'RENDERED', {
-      videoUrl: sceneVideoUrl,
+    await videoSceneRepository.updateStatus(sceneId, failed.length || assemblyFailed ? 'FAILED' : 'RENDERED', {
+      videoUrl: assemblyFailed ? null : sceneVideoUrl,
       actualDurationSec: actualDuration,
-      errorMessage: failed.length
-        ? `${failed.length} shot(s) failed; assembled ${rendered.length} shot(s)`
-        : null,
+      errorMessage: assemblyFailed
+        ? `Failed to assemble ${rendered.length} shot clips into the scene video (${!ffmpegOk ? 'FFmpeg unavailable' : 'FFmpeg error'}). All shots rendered individually; retry the scene to re-assemble.`
+        : failed.length
+          ? `${failed.length} shot(s) failed; assembled ${rendered.length} shot(s)`
+          : null,
     });
 
-    if (!failed.length) {
+    if (!failed.length && !assemblyFailed) {
       await videoProjectRepository.incrementCompletedScenes(project.id);
     }
     const updated = await videoProjectRepository.findById(project.id);

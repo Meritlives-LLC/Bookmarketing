@@ -112,8 +112,22 @@ async function downloadToFile(urlOrKey: string, dest: string): Promise<void> {
   await pipeline(Readable.fromWeb(body as any), createWriteStream(dest));
 }
 
+/**
+ * Flattens a project/scene identifier into a value safe to use as an
+ * fs.mkdtemp prefix. Extracted as its own function (rather than left inline)
+ * so the regression this exists to prevent — a projectId containing "/"
+ * (e.g. "<id>/scenes/<sceneId>" for scene-level assembly) making mkdtemp
+ * throw ENOENT because its prefix's parent directory doesn't exist — has a
+ * direct, dependency-free unit test instead of only being covered
+ * indirectly by a full (FFmpeg + S3 dependent) assemble() call.
+ */
+export function sanitizeTmpDirPrefix(projectId: string): string {
+  return projectId.replace(/[\\/]/g, '-');
+}
+
 export const ffmpegAssemblyService = {
   srtToAss,
+  sanitizeTmpDirPrefix,
   async isAvailable(): Promise<boolean> {
     try { await execFileAsync('ffmpeg', ['-version']); return true; }
     catch { return false; }
@@ -121,7 +135,13 @@ export const ffmpegAssemblyService = {
   async assemble(opts: AssembleOptions): Promise<AssembleResult> {
     await ensureFfmpeg();
     if (!opts.clips.length) throw AppError.badRequest('No clips to assemble');
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), `bmos-film-${opts.projectId}-`));
+    // opts.projectId doubles as a storage key prefix (book-video/<projectId>/final),
+    // where slashes are wanted (e.g. "<id>/scenes/<sceneId>" for scene-level
+    // assembly) — but fs.mkdtemp requires its prefix's parent directory to
+    // already exist, so a projectId containing "/" made mkdtemp throw ENOENT
+    // on every call before any work was done. Flatten only for the local temp
+    // dir name; the storage keys below still use the original opts.projectId.
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), `bmos-film-${sanitizeTmpDirPrefix(opts.projectId)}-`));
     const clipPaths: string[] = [];
     let totalDuration = 0;
     try {

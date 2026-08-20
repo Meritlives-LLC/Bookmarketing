@@ -122,19 +122,36 @@ export async function processBookVideoJob(job: Job): Promise<void> {
       const srtKey = await storageService.uploadBuffer(Buffer.from(srt, 'utf-8'), 'application/x-subrip', `book-video/${videoProjectId}/final`);
       const vttKey = await storageService.uploadBuffer(Buffer.from(vtt, 'utf-8'), 'text/vtt', `book-video/${videoProjectId}/final`);
       const assKey = await storageService.uploadBuffer(Buffer.from(ass, 'utf-8'), 'text/plain', `book-video/${videoProjectId}/final`);
-      // Never present a single scene as the complete film except as explicit emergency preview
-      const isCompleteFilm = ffmpegOk && rendered.length === scenes.filter((s) => s.status !== 'FAILED').length;
+      // This point is only reached when real FFmpeg assembly did NOT
+      // happen — either ffmpeg isn't installed, or the assemble() call in
+      // the try block above threw. In both cases nothing has actually
+      // concatenated the scenes into one film. The ONLY situation where a
+      // single scene's raw clip can legitimately stand in for "the film" is
+      // when there was exactly one scene to begin with — concatenating one
+      // clip with itself is a no-op, so the raw clip genuinely *is* the
+      // complete film. For any project with more than one scene, presenting
+      // scene 1 alone as the finished film — while marking the project
+      // COMPLETED — would silently hide a real assembly failure from the
+      // user, so that case must always resolve to FAILED with an honest
+      // error, never COMPLETED.
+      const totalNonFailedScenes = scenes.filter((s) => s.status !== 'FAILED').length;
+      const singleSceneFilm = rendered.length === 1 && totalNonFailedScenes === 1;
+      const assemblyWasAttemptedButFailed = ffmpegOk && !singleSceneFilm;
       await videoProjectRepository.update(videoProjectId, {
-        finalVideoUrl: isCompleteFilm ? rendered[0].videoUrl : null,
-        cleanVideoUrl: isCompleteFilm ? rendered[0].videoUrl : null,
+        finalVideoUrl: singleSceneFilm ? rendered[0].videoUrl : null,
+        cleanVideoUrl: singleSceneFilm ? rendered[0].videoUrl : null,
         srtUrl: srtKey, vttUrl: vttKey, assUrl: assKey,
-        progress: isCompleteFilm ? 100 : 95,
-        status: isCompleteFilm ? 'COMPLETED' : 'FAILED',
-        errorMessage: !ffmpegOk
-          ? 'FFmpeg unavailable — cannot assemble multi-scene film. Soft subtitle files saved. Install ffmpeg and retry render.'
-          : failed.length
-            ? `${failed.length} scene(s) failed; ${rendered.length} rendered. Retry failed scenes then re-render.`
-            : 'Assembly incomplete',
+        progress: singleSceneFilm ? 100 : 95,
+        status: singleSceneFilm ? 'COMPLETED' : 'FAILED',
+        errorMessage: singleSceneFilm
+          ? null
+          : !ffmpegOk
+            ? 'FFmpeg unavailable — cannot assemble multi-scene film. Soft subtitle files saved. Install ffmpeg and retry render.'
+            : assemblyWasAttemptedButFailed
+              ? `FFmpeg assembly failed while combining ${rendered.length} scene(s) into the final film. Soft subtitle files saved. Retry assembly.`
+              : failed.length
+                ? `${failed.length} scene(s) failed; ${rendered.length} rendered. Retry failed scenes then re-render.`
+                : 'Assembly incomplete',
       });
       break;
     }

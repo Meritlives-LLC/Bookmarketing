@@ -1,0 +1,76 @@
+import { srtToAss, sanitizeTmpDirPrefix, ffmpegAssemblyService } from '../../src/services/ffmpeg-assembly.service';
+import { promises as fs } from 'fs';
+import path from 'path';
+import os from 'os';
+
+describe('sanitizeTmpDirPrefix', () => {
+  // Regression test for a real bug: assemble() used opts.projectId directly
+  // as an fs.mkdtemp prefix. Project-level assembly passes a flat UUID
+  // (fine), but scene-level shot->scene assembly passes
+  // "<projectId>/scenes/<sceneId>" — and fs.mkdtemp requires its prefix's
+  // parent directory to already exist, so every scene-level assembly threw
+  // ENOENT before doing any work. This proves the fix holds for every shape
+  // of id this codebase actually passes as opts.projectId.
+
+  it('leaves a flat id (project-level assembly) unchanged', () => {
+    expect(sanitizeTmpDirPrefix('a1b2c3d4-uuid')).toBe('a1b2c3d4-uuid');
+  });
+
+  it('flattens a nested id (scene-level assembly) instead of leaving slashes in it', () => {
+    const flattened = sanitizeTmpDirPrefix('project-uuid/scenes/scene-uuid');
+    expect(flattened).not.toContain('/');
+    expect(flattened).toBe('project-uuid-scenes-scene-uuid');
+  });
+
+  it('flattens backslashes too (defensive — Windows-style separators)', () => {
+    expect(sanitizeTmpDirPrefix('a\\b\\c')).toBe('a-b-c');
+  });
+
+  it('actually resolves with fs.mkdtemp for a nested id (the real regression)', async () => {
+    const prefix = sanitizeTmpDirPrefix('regression-test-project/scenes/regression-test-scene');
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), `bmos-film-${prefix}-`));
+    expect(dir).toContain('bmos-film-regression-test-project-scenes-regression-test-scene-');
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('is exposed on the service object used by callers', () => {
+    expect(ffmpegAssemblyService.sanitizeTmpDirPrefix).toBe(sanitizeTmpDirPrefix);
+  });
+});
+
+describe('srtToAss', () => {
+  const sampleSrt =
+    '1\n00:00:00,000 --> 00:00:02,500\nHello there.\n\n' +
+    '2\n00:00:02,500 --> 00:00:05,000\nA second line.\n';
+
+  it('produces a valid ASS header with Script Info and Events sections', () => {
+    const ass = srtToAss(sampleSrt, 'CINEMATIC');
+    expect(ass).toContain('[Script Info]');
+    expect(ass).toContain('[V4+ Styles]');
+    expect(ass).toContain('[Events]');
+  });
+
+  it('converts every SRT cue into a Dialogue line', () => {
+    const ass = srtToAss(sampleSrt, 'CINEMATIC');
+    const dialogueLines = ass.split('\n').filter((l) => l.startsWith('Dialogue:'));
+    expect(dialogueLines).toHaveLength(2);
+    expect(dialogueLines[0]).toContain('Hello there.');
+    expect(dialogueLines[1]).toContain('A second line.');
+  });
+
+  it('converts SRT comma-decimal timestamps to ASS dot-decimal centiseconds', () => {
+    const ass = srtToAss(sampleSrt, 'CINEMATIC');
+    // 00:00:00,000 -> 0:00:00.00 ; 00:00:02,500 -> 0:00:02.50
+    expect(ass).toContain('0:00:00.00,0:00:02.50');
+  });
+
+  it('falls back to the CINEMATIC style for an unknown style name instead of throwing', () => {
+    expect(() => srtToAss(sampleSrt, 'NOT_A_REAL_STYLE')).not.toThrow();
+  });
+
+  it('applies a different, valid style block per named style', () => {
+    const classic = srtToAss(sampleSrt, 'CLASSIC');
+    const bold = srtToAss(sampleSrt, 'BOLD');
+    expect(classic).not.toEqual(bold);
+  });
+});

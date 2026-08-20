@@ -1,5 +1,12 @@
 FROM node:20.10.0-alpine AS base
 WORKDIR /app
+# Installed once in `base` (not only in `runtime`) so every stage built on
+# top of it has FFmpeg available — including dev's docker-compose.yml,
+# which runs worker-book-video against the `build` stage, not `runtime`.
+# Installing it only in `runtime` would leave the dev worker container with
+# no FFmpeg at all, silently forcing every local assembly attempt down the
+# "FFmpeg unavailable" fallback path.
+RUN apk add --no-cache ffmpeg
 
 # ── deps: install once, reused by build ─────────────────────────────
 FROM base AS deps
@@ -17,7 +24,7 @@ RUN npm run build
 FROM base AS runtime
 ENV NODE_ENV=production
 
-RUN apk add --no-cache curl ffmpeg \
+RUN apk add --no-cache curl \
   && addgroup -S app && adduser -S app -G app
 
 # IMPORTANT: copy node_modules from the `build` stage, not `deps`.
