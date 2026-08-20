@@ -865,6 +865,12 @@ model VideoShot {
   status               VideoShotStatus   @default(PENDING)
   videoUrl             String?
   providerGenerationId String?
+  /// When the in-flight providerGenerationId was submitted to the provider.
+  /// Used to detect stale/abandoned generations after a worker crash so they
+  /// can be safely retried instead of polled forever.
+  generationStartedAt  DateTime?
+  lastErrorType        ProviderErrorType?
+  retryCount           Int               @default(0)
   errorMessage         String?
   createdAt            DateTime          @default(now())
   updatedAt            DateTime          @updatedAt
@@ -872,6 +878,8 @@ model VideoShot {
   @@unique([sceneId, shotNumber])
   @@index([sceneId])
   @@index([cameraMovement])
+  @@index([status])
+  @@index([providerGenerationId])
   @@map("video_shots")
 }
 

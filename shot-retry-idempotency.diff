@@ -1,0 +1,153 @@
+diff --git a/backend/prisma/schema.prisma b/backend/prisma/schema.prisma
+index 45a540f..19bf31d 100644
+--- a/backend/prisma/schema.prisma
++++ b/backend/prisma/schema.prisma
+@@ -865,6 +865,12 @@ model VideoShot {
+   status               VideoShotStatus   @default(PENDING)
+   videoUrl             String?
+   providerGenerationId String?
++  /// When the in-flight providerGenerationId was submitted to the provider.
++  /// Used to detect stale/abandoned generations after a worker crash so they
++  /// can be safely retried instead of polled forever.
++  generationStartedAt  DateTime?
++  lastErrorType        ProviderErrorType?
++  retryCount           Int               @default(0)
+   errorMessage         String?
+   createdAt            DateTime          @default(now())
+   updatedAt            DateTime          @updatedAt
+@@ -872,6 +878,8 @@ model VideoShot {
+   @@unique([sceneId, shotNumber])
+   @@index([sceneId])
+   @@index([cameraMovement])
++  @@index([status])
++  @@index([providerGenerationId])
+   @@map("video_shots")
+ }
+ 
+diff --git a/backend/src/services/video-project.service.ts b/backend/src/services/video-project.service.ts
+index 39db993..4167022 100644
+--- a/backend/src/services/video-project.service.ts
++++ b/backend/src/services/video-project.service.ts
+@@ -1,4 +1,4 @@
+-import { VisualStyle, VideoAspectRatio, SubtitleMode, SubtitleStyle, ExtractionStatus } from '@prisma/client';
++import { VisualStyle, VideoAspectRatio, SubtitleMode, SubtitleStyle, ExtractionStatus, ProviderErrorType } from '@prisma/client';
+ import { bookRepository } from '../repositories/book.repository';
+ import { manuscriptRepository } from '../repositories/manuscript.repository';
+ import { videoProjectRepository } from '../repositories/video-project.repository';
+@@ -603,9 +603,35 @@ export const videoProjectService = {
+     const project = scene.videoProject;
+     if (project.status === 'CANCELED' || project.status === 'PAUSED') return;
+ 
+-    await prisma.videoShot.update({ where: { id: shotId }, data: { status: 'GENERATING', errorMessage: null } });
+-
+     const provider = getVideoProvider();
++
++    // Idempotency guard: if this shot already has an in-flight provider
++    // generation (e.g. the job was retried by BullMQ, delivered twice, or
++    // the worker crashed mid-poll after already submitting to the provider),
++    // resume polling that existing generation instead of submitting a new,
++    // separately-billed request. Only resubmit if the prior attempt is
++    // clearly stale (no start time recorded, or older than the max wait
++    // window below) — that indicates the earlier submission itself likely
++    // never completed and is safe to abandon.
++    const STALE_GENERATION_MS = 10 * 60 * 1000; // matches the 60 * 10s poll window below
++    if (
++      shot.status === 'GENERATING' &&
++      shot.providerGenerationId &&
++      shot.generationStartedAt &&
++      Date.now() - shot.generationStartedAt.getTime() < STALE_GENERATION_MS
++    ) {
++      logger.info('Resuming in-flight shot generation instead of resubmitting', {
++        shotId,
++        providerGenerationId: shot.providerGenerationId,
++      });
++      await this.pollShotGeneration(shotId, shot.providerGenerationId, provider);
++      return;
++    }
++
++    await prisma.videoShot.update({
++      where: { id: shotId },
++      data: { status: 'GENERATING', errorMessage: null, generationStartedAt: new Date() },
++    });
+     const aspect = project.aspectRatio === 'RATIO_9_16' ? '9:16' : project.aspectRatio === 'RATIO_1_1' ? '1:1' : '16:9';
+ 
+     // Continuity: inject canonical character/location/prop profiles
+@@ -756,19 +782,39 @@ export const videoProjectService = {
+     if (result.status === 'failed') {
+       await prisma.videoShot.update({
+         where: { id: shotId },
+-        data: { status: 'FAILED', errorMessage: result.errorMessage },
++        data: {
++          status: 'FAILED',
++          errorMessage: result.errorMessage,
++          lastErrorType: (result.errorType as ProviderErrorType) ?? 'UNKNOWN',
++          retryCount: { increment: 1 },
++        },
+       });
+       return;
+     }
+ 
+     await prisma.videoShot.update({
+       where: { id: shotId },
+-      data: { providerGenerationId: result.providerGenerationId, status: 'GENERATING' },
++      data: { providerGenerationId: result.providerGenerationId, status: 'GENERATING', generationStartedAt: new Date() },
+     });
+ 
++    await this.pollShotGeneration(shotId, result.providerGenerationId, provider, project.id);
++  },
++
++  /**
++   * Poll an already-submitted provider generation to completion. Extracted
++   * so a resumed (already in-flight) generation and a freshly-submitted one
++   * share identical completion/failure handling, and so a worker crash mid-
++   * poll never causes a second billed generateVideo() call for the same shot.
++   */
++  async pollShotGeneration(
++    shotId: string,
++    providerGenerationId: string,
++    provider: ReturnType<typeof getVideoProvider>,
++    projectId?: string
++  ): Promise<void> {
+     for (let i = 0; i < 60; i++) {
+       await new Promise((r) => setTimeout(r, 10_000));
+-      const status = await provider.getGenerationStatus(result.providerGenerationId);
++      const status = await provider.getGenerationStatus(providerGenerationId);
+       if (status.status === 'completed' && status.videoUrl) {
+         let storedUrl = status.videoUrl;
+         try {
+@@ -777,7 +823,7 @@ export const videoProjectService = {
+             storedUrl = await storageService.uploadBuffer(
+               Buffer.from(await res.arrayBuffer()),
+               'video/mp4',
+-              `book-video/${project.id}/shots/${shotId}`
++              `book-video/${projectId ?? 'unknown'}/shots/${shotId}`
+             );
+           }
+         } catch (e) {
+@@ -792,14 +838,24 @@ export const videoProjectService = {
+       if (status.status === 'failed') {
+         await prisma.videoShot.update({
+           where: { id: shotId },
+-          data: { status: 'FAILED', errorMessage: status.errorMessage },
++          data: {
++            status: 'FAILED',
++            errorMessage: status.errorMessage,
++            lastErrorType: (status.errorType as ProviderErrorType) ?? 'UNKNOWN',
++            retryCount: { increment: 1 },
++          },
+         });
+         return;
+       }
+     }
+     await prisma.videoShot.update({
+       where: { id: shotId },
+-      data: { status: 'FAILED', errorMessage: 'Timed out waiting for video provider' },
++      data: {
++        status: 'FAILED',
++        errorMessage: 'Timed out waiting for video provider',
++        lastErrorType: 'TIMEOUT',
++        retryCount: { increment: 1 },
++      },
+     });
+   },
+ };
