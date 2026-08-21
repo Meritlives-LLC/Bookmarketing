@@ -67,7 +67,7 @@ export const authService = {
   async refresh(refreshToken: string) {
     let payload: JwtPayload;
     try {
-      payload = jwt.verify(refreshToken, config.jwt.refreshSecret) as JwtPayload;
+      payload = jwt.verify(refreshToken, config.jwt.refreshSecret, { algorithms: ['HS256'] }) as JwtPayload;
     } catch {
       throw AppError.unauthorized('Invalid or expired refresh token', 'REFRESH_INVALID');
     }

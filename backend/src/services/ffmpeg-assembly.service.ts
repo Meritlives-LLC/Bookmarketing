@@ -1,15 +1,21 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { createWriteStream, promises as fs } from 'fs';
+import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-import { pipeline } from 'stream/promises';
-import { Readable } from 'stream';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/helpers';
 import { storageService } from './storage.service';
+import { secureDownloadToFile } from '../utils/secure-remote-fetch';
 
 const execFileAsync = promisify(execFile);
+
+// A single provider-generated shot clip should never legitimately exceed a
+// few hundred MB; capping here bounds both memory/disk use per download and
+// the damage an SSRF/DoS attempt via a huge response body could do.
+const MAX_CLIP_BYTES = 300 * 1024 * 1024;
+const MAX_CLIPS_PER_ASSEMBLY = 200;
+const MAX_TOTAL_DURATION_SEC = 60 * 60; // 1 hour
 
 export interface AssemblyClip {
   videoUrl: string;
@@ -105,11 +111,16 @@ async function downloadToFile(urlOrKey: string, dest: string): Promise<void> {
       else throw e;
     }
   }
-  const res = await fetch(urlOrKey);
-  if (!res.ok) throw new Error(`Failed to download clip: ${res.status}`);
-  const body = res.body;
-  if (!body) throw new Error('Empty response body');
-  await pipeline(Readable.fromWeb(body as any), createWriteStream(dest));
+  // Clips fed to FFmpeg must never be fetched with an unrestricted
+  // fetch() — a provider-influenced or malformed videoUrl could otherwise
+  // be used to reach internal/private network addresses (SSRF) before the
+  // bytes ever hit FFmpeg. Route through the centralized, SSRF-hardened
+  // downloader instead (HTTPS-only, private/reserved IPs blocked, redirects
+  // re-validated, size/time capped, streamed rather than buffered).
+  await secureDownloadToFile(urlOrKey, dest, {
+    maxBytes: MAX_CLIP_BYTES,
+    allowedContentTypePrefixes: ['video/', 'application/octet-stream'],
+  });
 }
 
 /**
@@ -135,6 +146,13 @@ export const ffmpegAssemblyService = {
   async assemble(opts: AssembleOptions): Promise<AssembleResult> {
     await ensureFfmpeg();
     if (!opts.clips.length) throw AppError.badRequest('No clips to assemble');
+    if (opts.clips.length > MAX_CLIPS_PER_ASSEMBLY) {
+      throw AppError.badRequest(`Too many clips in one assembly (max ${MAX_CLIPS_PER_ASSEMBLY})`, 'ASSEMBLY_TOO_LARGE');
+    }
+    const requestedDuration = opts.clips.reduce((sum, c) => sum + (c.durationSec || 0), 0);
+    if (requestedDuration > MAX_TOTAL_DURATION_SEC) {
+      throw AppError.badRequest(`Total duration exceeds maximum allowed (${MAX_TOTAL_DURATION_SEC}s)`, 'ASSEMBLY_TOO_LARGE');
+    }
     // opts.projectId doubles as a storage key prefix (book-video/<projectId>/final),
     // where slashes are wanted (e.g. "<id>/scenes/<sceneId>" for scene-level
     // assembly) — but fs.mkdtemp requires its prefix's parent directory to

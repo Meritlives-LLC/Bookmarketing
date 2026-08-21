@@ -1,0 +1,598 @@
+*** Begin Patch
+*** Update File: frontend/lib/api/client.ts
+@@
+ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
+@@
+-function getAccessToken(): string | null {
+-  if (typeof window === "undefined") return null;
+-  return localStorage.getItem("accessToken");
+-}
+-
+-function getRefreshToken(): string | null {
+-  if (typeof window === "undefined") return null;
+-  return localStorage.getItem("refreshToken");
+-}
+-
+-function setTokens(accessToken: string, refreshToken?: string) {
+-  if (typeof window === "undefined") return;
+-  localStorage.setItem("accessToken", accessToken);
+-  if (refreshToken) localStorage.setItem("refreshToken", refreshToken);
+-}
+-
+-function clearTokens() {
+-  if (typeof window === "undefined") return;
+-  localStorage.removeItem("accessToken");
+-  localStorage.removeItem("refreshToken");
+-}
+-
+@@
+-        const refreshToken = getRefreshToken();
+         const res = await fetch(`${API_BASE}/auth/refresh`, {
+           method: "POST",
+           headers: { "Content-Type": "application/json" },
+           credentials: "include",
+-          body: refreshToken ? JSON.stringify({ refreshToken }) : undefined,
+         });
+         if (!res.ok) {
+-          clearTokens();
+           return null;
+         }
+-        const json = await res.json().catch(() => ({}));
+-        const accessToken: string | undefined = json?.data?.accessToken;
+-        const newRefreshToken: string | undefined = json?.data?.refreshToken;
+-        if (!accessToken) {
+-          clearTokens();
+-          return null;
+-        }
+-        setTokens(accessToken, newRefreshToken);
+-        return accessToken;
++        return "cookie-session";
+@@
+-  clearTokens();
+   const redirect = `${window.location.pathname}${window.location.search}`;
+@@
+-  const token = getAccessToken();
+   const headers: HeadersInit = {
+     "Content-Type": "application/json",
+     ...(options.headers || {}),
+   };
+-  if (token) {
+-    (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`;
+-  }
+@@
+-      const newToken = await refreshAccessToken();
+-      if (newToken) {
++      const refreshed = await refreshAccessToken();
++      if (refreshed) {
+         return request<T>(path, options, true);
+       }
+@@
+ export async function apiDownload(path: string, fallbackFilename: string): Promise<void> {
+-  const token = getAccessToken();
+-  const headers: HeadersInit = {};
+-  if (token) (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`;
+-
+-  const res = await fetch(`${API_BASE}${path}`, { headers, credentials: "include" });
++  const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
+*** Update File: frontend/lib/hooks/useAuth.ts
+@@
+   useEffect(() => {
+-    const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
+-    if (!token) {
+-      setLoading(false);
+-      return;
+-    }
+     api
+       .get<User>("/user")
+       .then(setUser)
+       .catch(() => {
+-        localStorage.removeItem("accessToken");
+-        localStorage.removeItem("refreshToken");
++        setUser(null);
+       })
+@@
+-    localStorage.removeItem("accessToken");
+-    localStorage.removeItem("refreshToken");
+     setUser(null);
+*** Update File: frontend/lib/auth/auth.utils.ts
+@@
+ export function getAccessToken(): string | null {
+-  if (typeof window === "undefined") return null;
+-  return localStorage.getItem("accessToken");
++  return null;
+ }
+ 
+-export function setTokens(accessToken: string, refreshToken: string) {
+-  localStorage.setItem("accessToken", accessToken);
+-  localStorage.setItem("refreshToken", refreshToken);
++export function setTokens(_accessToken: string, _refreshToken: string) {
++  // Authentication is cookie-based. Tokens must never be exposed to JS.
+ }
+ 
+ export function clearTokens() {
+-  localStorage.removeItem("accessToken");
+-  localStorage.removeItem("refreshToken");
++  // HttpOnly cookies are cleared by POST /auth/logout on the API origin.
+ }
+ 
+ export function isAuthenticated(): boolean {
+-  return !!getAccessToken();
++  return false;
+ }
+*** Update File: frontend/app/(auth)/login/page.tsx
+@@
+-      const data = await api.post<{ accessToken: string; refreshToken: string; user: unknown }>(
++      await api.post<{ user: unknown }>(
+         "/auth/login",
+         { email, password }
+       );
+-      localStorage.setItem("accessToken", data.accessToken);
+-      localStorage.setItem("refreshToken", data.refreshToken);
+       const redirect = searchParams.get("redirect");
+*** Update File: frontend/app/(auth)/register/page.tsx
+@@
+-      const data = await api.post<{ accessToken: string; refreshToken: string }>(
++      await api.post<{ user: unknown }>(
+         "/auth/register",
+         form
+       );
+-      localStorage.setItem("accessToken", data.accessToken);
+-      localStorage.setItem("refreshToken", data.refreshToken);
+       router.push("/dashboard");
+*** Update File: frontend/middleware.ts
+@@
+-// The client keeps the real session in localStorage (accessToken /
+-// refreshToken), which middleware (server-side) cannot read at all. The
+-// actual gating happens client-side in AuthGuard.tsx, which checks that
+-// localStorage token against GET /user via lib/api/client.ts. Middleware
+-// just passes requests through; do not reintroduce a cookie-based redirect
+-// here unless the cookie's `domain` is set to a parent domain shared with
+-// the frontend (or API calls are proxied same-origin), otherwise it will
+-// reproduce this exact bug.
++// Authentication is handled by the API's HttpOnly cookies. The frontend API
++// client sends credentials to the API origin; this middleware deliberately
++// does not inspect tokens or store authentication state in browser JS.
+*** Update File: backend/src/controllers/user.controller.ts
+@@
+           user: omit(user, ['passwordHash', 'resetToken', 'emailVerifyToken']),
+-          accessToken,
+-          refreshToken,
+         },
+@@
+           user: omit(user, ['passwordHash', 'resetToken', 'emailVerifyToken']),
+-          accessToken,
+-          refreshToken,
+         },
+@@
+-      const token = req.cookies?.refreshToken ?? req.body.refreshToken;
++      const token = req.cookies?.refreshToken;
+@@
+-      res.json({ success: true, data: { accessToken, refreshToken } });
++      res.json({ success: true, data: { user } });
+*** Update File: backend/src/services/user.service.ts
+@@
+-import { hashPassword, comparePassword, generateRandomToken } from '../utils/crypto';
++import { hashPassword, comparePassword, generateRandomToken, hashToken } from '../utils/crypto';
+@@
+-    const emailVerifyToken = generateRandomToken(16);
++    const emailVerifyToken = generateRandomToken(16);
+@@
+-      emailVerifyToken,
++      emailVerifyToken: hashToken(emailVerifyToken),
+@@
+-    await userRepository.setResetToken(user.id, token, expires);
++    await userRepository.setResetToken(user.id, hashToken(token), expires);
+*** Update File: backend/src/repositories/user.repository.ts
+@@
+ import { prisma } from '../config/database';
++import { hashToken } from '../utils/crypto';
+@@
+   findByEmailVerifyToken(token: string): Promise<User | null> {
+-    return prisma.user.findFirst({ where: { emailVerifyToken: token } });
++    return prisma.user.findFirst({ where: { emailVerifyToken: hashToken(token) } });
+@@
+   findByResetToken(token: string): Promise<User | null> {
+     return prisma.user.findFirst({
+-      where: { resetToken: token, resetTokenExpires: { gt: new Date() } },
++      where: { resetToken: hashToken(token), resetTokenExpires: { gt: new Date() } },
+     });
+*** Update File: backend/src/validators/book.validator.ts
+@@
+ export const createBookSchema = z.object({
+@@
+-  amazonUrl: z.string().url().optional(),
+-  goodreadsUrl: z.string().url().optional(),
++  amazonUrl: z.string().url().max(2048).optional(),
++  goodreadsUrl: z.string().url().max(2048).optional(),
+*** Add File: backend/src/utils/outbound-url.ts
++import dns from 'node:dns/promises';
++import net from 'node:net';
++import { AppError } from './helpers';
++
++const BLOCKED = new net.BlockList();
++BLOCKED.addCIDRs([
+++  '0.0.0.0/8', '100.64.0.0/10', '192.0.0.0/24', '192.0.2.0/24',
++  '198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '224.0.0.0/4',
++  '240.0.0.0/4', '2001:db8::/32', 'ff00::/8', '100::/64', '2001:20::/28',
++  '2002::/16', '2001::/32', '64:ff9b::/96', '64:ff9b:1::/48',
++]);
++
++export const GOODREADS_HOSTS = new Set(['goodreads.com', 'www.goodreads.com']);
++export const AMAZON_HOSTS = new Set([
++  'amazon.com', 'www.amazon.com', 'smile.amazon.com',
++  'amazon.co.uk', 'www.amazon.co.uk', 'amazon.ca', 'www.amazon.ca',
++  'amazon.com.au', 'www.amazon.com.au', 'amazon.de', 'www.amazon.de',
++  'amazon.fr', 'www.amazon.fr', 'amazon.es', 'www.amazon.es',
++  'amazon.it', 'www.amazon.it', 'amazon.in', 'www.amazon.in',
++]);
++
++function isBlockedIp(address: string, family: number): boolean {
++  if (net.isIP(address) === 0) return true;
++  return BLOCKED.check(address, family === 6 ? 'ipv6' : 'ipv4');
++}
++
++export async function validateOutboundUrl(raw: string, allowedHosts: ReadonlySet<string>): Promise<URL> {
++  let url: URL;
++  try { url = new URL(raw); } catch { throw AppError.badRequest('Invalid external URL', 'INVALID_EXTERNAL_URL'); }
++  if (url.protocol !== 'https:' || url.username || url.password || url.port) {
++    throw AppError.badRequest('External URL must use HTTPS without credentials or a custom port', 'INVALID_EXTERNAL_URL');
++  }
++  const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
++  if (!allowedHosts.has(hostname)) {
++    throw AppError.badRequest('External URL host is not allowed', 'EXTERNAL_HOST_NOT_ALLOWED');
++  }
++  const records = await dns.lookup(hostname, { all: true, verbatim: true });
++  if (!records.length || records.some((r) => isBlockedIp(r.address, r.family))) {
++    throw AppError.badRequest('External URL resolves to a blocked network address', 'SSRF_BLOCKED');
++  }
++  return url;
++}
+*** Update File: backend/src/services/scraper.service.ts
+@@
+ import { scrapeCache, acquireRateSlot } from './scrape-cache.service';
++import { validateOutboundUrl, GOODREADS_HOSTS, AMAZON_HOSTS } from '../utils/outbound-url';
+@@
+   async scrapeGoodreads(url: string): Promise<ScrapeResult> {
+     return withCache('goodreads', url, async () => {
+-      const { data } = await axios.get<string>(url, { timeout: 12000, headers: REQUEST_HEADERS });
++      const safeUrl = await validateOutboundUrl(url, GOODREADS_HOSTS);
++      const { data } = await axios.get<string>(safeUrl.toString(), {
++        timeout: 12000, headers: REQUEST_HEADERS, maxRedirects: 0, maxContentLength: 5 * 1024 * 1024,
++      });
+@@
+   async scrapeAmazon(url: string): Promise<ScrapeResult> {
+     return withCache('amazon', url, async () => {
+-      const { data } = await axios.get<string>(url, { timeout: 12000, headers: REQUEST_HEADERS });
++      const safeUrl = await validateOutboundUrl(url, AMAZON_HOSTS);
++      const { data } = await axios.get<string>(safeUrl.toString(), {
++        timeout: 12000, headers: REQUEST_HEADERS, maxRedirects: 0, maxContentLength: 5 * 1024 * 1024,
++      });
+*** Update File: frontend/next.config.mjs
+@@
+-      // fallback for arbitrary cover hosts
+-      { protocol: "https", hostname: "**" },
+-      { protocol: "http", hostname: "localhost" },
+     ],
+*** Update File: backend/src/services/ffmpeg-assembly.service.ts
+@@
+ async function downloadToFile(urlOrKey: string, dest: string): Promise<void> {
+-  if (!/^https?:\/\//i.test(urlOrKey)) {
+-    try {
+-      const buf = await storageService.getObjectBuffer(urlOrKey);
+-      await fs.writeFile(dest, buf);
+-      return;
+-    } catch (e) {
+-      const publicUrl = storageService.publicUrl(urlOrKey);
+-      if (publicUrl) urlOrKey = publicUrl;
+-      else throw e;
+-    }
+-  }
+-  const res = await fetch(urlOrKey);
+-  if (!res.ok) throw new Error(`Failed to download clip: ${res.status}`);
+-  const body = res.body;
+-  if (!body) throw new Error('Empty response body');
+-  await pipeline(Readable.fromWeb(body as any), createWriteStream(dest));
++  if (/^https?:\/\//i.test(urlOrKey)) {
++    throw AppError.badRequest('FFmpeg assembly accepts storage keys only; remote clip URLs are forbidden.', 'REMOTE_CLIP_URL_FORBIDDEN');
++  }
++  const buf = await storageService.getObjectBuffer(urlOrKey);
++  await fs.writeFile(dest, buf);
+ }
+*** Update File: backend/src/types/book-video.types.ts
+@@
+ export interface AssemblyClip {
+-  videoUrl: string;
++  /** Durable object-storage key. Arbitrary remote URLs are forbidden. */
++  videoUrl: string;
+*** Add File: backend/src/validators/video-project.validator.ts
++import { z } from 'zod';
++import { SubtitleMode, SubtitleStyle, VideoAspectRatio, VisualStyle } from '@prisma/client';
++
++const strictJsonRecord = z.record(z.string().max(80), z.unknown()).refine((v) => Object.keys(v).length <= 40, 'Too many configuration fields');
++
++export const emptyVideoBodySchema = z.object({}).strict().default({});
++
++export const createVideoProjectSchema = z.object({
++  name: z.string().min(1).max(200).optional(),
++  visualStyle: z.nativeEnum(VisualStyle).optional(),
++  aspectRatio: z.nativeEnum(VideoAspectRatio).optional(),
++  resolution: z.string().max(32).optional(),
++  videoModel: z.string().max(120).optional(),
++  subtitleEnabled: z.boolean().optional(),
++  subtitleMode: z.nativeEnum(SubtitleMode).optional(),
++  subtitleStyle: z.nativeEnum(SubtitleStyle).optional(),
++  subtitleConfig: strictJsonRecord.optional(),
++  narrationWordsPerMinute: z.number().int().min(80).max(240).optional(),
++}).strict();
++
++export const generateVideoSchema = z.object({
++  sceneId: z.string().uuid().optional(),
++}).strict();
++
++export const updateScenePromptSchema = z.object({
++  visualPrompt: z.string().max(12000).optional(),
++  negativePrompt: z.string().max(6000).optional(),
++  cameraPlan: z.string().max(6000).optional(),
++}).strict();
++
++export const updateShotPromptSchema = z.object({
++  visualPrompt: z.string().max(12000).optional(),
++  negativePrompt: z.string().max(6000).optional(),
++  camera: z.string().max(500).optional(),
++  shotType: z.string().max(100).optional(),
++  durationSec: z.number().min(2).max(8).optional(),
++  cameraMovement: z.string().max(80).optional(),
++  cameraSpeed: z.string().max(80).optional(),
++  cameraDirection: z.string().max(120).optional(),
++  cameraAngle: z.string().max(80).optional(),
++  cameraRig: z.string().max(100).optional(),
++  lens: z.string().max(80).optional(),
++  focalLength: z.string().max(80).optional(),
++  framing: z.string().max(100).optional(),
++  composition: z.string().max(500).optional(),
++  focusMode: z.string().max(80).optional(),
++  depthOfField: z.string().max(80).optional(),
++  movementPurpose: z.string().max(200).optional(),
++  movement: z.string().max(500).optional(),
++  recompilePrompt: z.boolean().optional(),
++}).strict().refine((v) => Object.keys(v).length > 0, 'At least one field is required');
++
++export const updateSubtitleSettingsSchema = z.object({
++  subtitleMode: z.nativeEnum(SubtitleMode).optional(),
++  subtitleStyle: z.nativeEnum(SubtitleStyle).optional(),
++  subtitleConfig: strictJsonRecord.optional(),
++  subtitleEnabled: z.boolean().optional(),
++}).strict().refine((v) => Object.keys(v).length > 0, 'At least one field is required');
+*** Update File: backend/src/routes/v1/video-project.routes.ts
+@@
+ import { aiGenerationRateLimiter } from '../../middleware/rate-limit.middleware';
++import { validate } from '../../middleware/validation.middleware';
++import {
++  emptyVideoBodySchema, createVideoProjectSchema, generateVideoSchema,
++  updateScenePromptSchema, updateShotPromptSchema, updateSubtitleSettingsSchema,
++} from '../../validators/video-project.validator';
+@@
+-router.post('/:bookId/video-projects', videoProjectController.create);
++router.post('/:bookId/video-projects', validate(createVideoProjectSchema), videoProjectController.create);
+@@
+-router.post('/video-projects/:projectId/analyze', aiGenerationRateLimiter, videoProjectController.analyze);
+-router.post('/video-projects/:projectId/plan', aiGenerationRateLimiter, videoProjectController.plan);
+-router.post('/video-projects/:projectId/generate', aiGenerationRateLimiter, videoProjectController.generate);
+-router.post('/video-projects/:projectId/pause', videoProjectController.pause);
+-router.post('/video-projects/:projectId/resume', aiGenerationRateLimiter, videoProjectController.resume);
+-router.post('/video-projects/:projectId/cancel', videoProjectController.cancel);
+-router.post('/video-projects/:projectId/render', aiGenerationRateLimiter, videoProjectController.render);
+-router.post('/video-projects/:projectId/subtitles', aiGenerationRateLimiter, videoProjectController.generateSubtitles);
+-router.patch('/video-projects/:projectId/subtitle-settings', videoProjectController.updateSubtitleSettings);
++router.post('/video-projects/:projectId/analyze', aiGenerationRateLimiter, validate(emptyVideoBodySchema), videoProjectController.analyze);
++router.post('/video-projects/:projectId/plan', aiGenerationRateLimiter, validate(emptyVideoBodySchema), videoProjectController.plan);
++router.post('/video-projects/:projectId/generate', aiGenerationRateLimiter, validate(generateVideoSchema), videoProjectController.generate);
++router.post('/video-projects/:projectId/pause', validate(emptyVideoBodySchema), videoProjectController.pause);
++router.post('/video-projects/:projectId/resume', aiGenerationRateLimiter, validate(emptyVideoBodySchema), videoProjectController.resume);
++router.post('/video-projects/:projectId/cancel', validate(emptyVideoBodySchema), videoProjectController.cancel);
++router.post('/video-projects/:projectId/render', aiGenerationRateLimiter, validate(emptyVideoBodySchema), videoProjectController.render);
++router.post('/video-projects/:projectId/subtitles', aiGenerationRateLimiter, validate(emptyVideoBodySchema), videoProjectController.generateSubtitles);
++router.patch('/video-projects/:projectId/subtitle-settings', validate(updateSubtitleSettingsSchema), videoProjectController.updateSubtitleSettings);
+@@
+-router.post('/video-scenes/:sceneId/regenerate', aiGenerationRateLimiter, videoProjectController.regenerateScene);
+-router.post('/video-scenes/:sceneId/generate', aiGenerationRateLimiter, videoProjectController.regenerateScene);
+-router.patch('/video-scenes/:sceneId/prompt', videoProjectController.updateScenePrompt);
+-router.patch('/video-shots/:shotId/prompt', videoProjectController.updateShotPrompt);
+-router.post('/video-shots/:shotId/regenerate', aiGenerationRateLimiter, videoProjectController.regenerateShot);
+-router.post('/video-shots/:shotId/generate-camera', aiGenerationRateLimiter, videoProjectController.generateCameraForShot);
+-router.post('/video-shots/:shotId/fix-continuity', videoProjectController.fixCameraContinuity);
++router.post('/video-scenes/:sceneId/regenerate', aiGenerationRateLimiter, validate(emptyVideoBodySchema), videoProjectController.regenerateScene);
++router.post('/video-scenes/:sceneId/generate', aiGenerationRateLimiter, validate(emptyVideoBodySchema), videoProjectController.regenerateScene);
++router.patch('/video-scenes/:sceneId/prompt', validate(updateScenePromptSchema), videoProjectController.updateScenePrompt);
++router.patch('/video-shots/:shotId/prompt', validate(updateShotPromptSchema), videoProjectController.updateShotPrompt);
++router.post('/video-shots/:shotId/regenerate', aiGenerationRateLimiter, validate(emptyVideoBodySchema), videoProjectController.regenerateShot);
++router.post('/video-shots/:shotId/generate-camera', aiGenerationRateLimiter, validate(emptyVideoBodySchema), videoProjectController.generateCameraForShot);
++router.post('/video-shots/:shotId/fix-continuity', validate(emptyVideoBodySchema), videoProjectController.fixCameraContinuity);
+*** Update File: backend/src/config/redis.ts
+@@
+ export const redis = createRedisClient();
++
++export async function acquireDistributedLock(key: string, ttlMs: number): Promise<string | null> {
++  if (!config.redis.enabled) return null;
++  const token = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
++  try {
++    const result = await redis.set(key, token, 'PX', ttlMs, 'NX');
++    return result === 'OK' ? token : null;
++  } catch {
++    return null;
++  }
++}
++
++export async function releaseDistributedLock(key: string, token: string): Promise<void> {
++  if (!config.redis.enabled) return;
++  try {
++    await redis.eval(
++      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
++      1, key, token
++    );
++  } catch { /* best effort; TTL remains the safety net */ }
++}
+*** Update File: backend/src/config/index.ts
+@@
+   rateLimit: {
+@@
+   },
++
++  videoSecurity: {
++    maxDailyCredits: parseInt(process.env.VIDEO_DAILY_CREDIT_LIMIT ?? '50', 10),
++    maxConcurrentProjects: parseInt(process.env.VIDEO_MAX_CONCURRENT_PROJECTS_PER_USER ?? '1', 10),
++    lockTtlMs: parseInt(process.env.VIDEO_GENERATION_LOCK_TTL_MS ?? '120000', 10),
++  },
+*** Update File: backend/src/services/video-project.service.ts
+@@
+ import { storageService } from './storage.service';
++import { acquireDistributedLock, releaseDistributedLock } from '../config/redis';
++import { config } from '../config';
+@@
+   async startGeneration(userId: string, projectId: string, opts?: { sceneId?: string }) {
++    const lockKey = `lock:video-generation:user:${userId}`;
++    const lock = await acquireDistributedLock(lockKey, config.videoSecurity.lockTtlMs);
++    if (!lock) throw AppError.conflict('Another video generation request is already being started for this account.', 'GENERATION_BUSY');
++    try {
+     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
+@@
+     if (project.status === 'GENERATING_VIDEO') {
+       throw AppError.conflict('Video generation is already running for this project', 'PROJECT_BUSY');
+     }
++    const activeProject = await prisma.videoProject.findFirst({
++      where: {
++        book: { userId },
++        status: { in: ['ANALYZING', 'PLANNING', 'GENERATING_REFERENCES', 'GENERATING_SCENES', 'GENERATING_VIDEO', 'GENERATING_SUBTITLES', 'ASSEMBLING'] },
++        NOT: { id: projectId },
++      },
++      select: { id: true },
++    });
++    if (activeProject) throw AppError.conflict('Another video project is already processing for this account.', 'USER_GENERATION_BUSY');
+@@
+     const cost = Math.max(1, pendingShots);
++
++    const dayStart = new Date();
++    dayStart.setHours(0, 0, 0, 0);
++    const daily = await prisma.billingEvent.aggregate({
++      _sum: { amount: true },
++      where: { userId, type: 'video_generation_charge', createdAt: { gte: dayStart } },
++    });
++    const usedToday = daily._sum.amount ?? 0;
++    if (usedToday + cost > config.videoSecurity.maxDailyCredits) {
++      throw AppError.tooManyRequests(`Daily video generation credit limit reached (${config.videoSecurity.maxDailyCredits}).`, 'DAILY_VIDEO_LIMIT');
++    }
+@@
+     return { projectId, enqueued: scenes.length, jobIds, creditsCharged: cost };
++    } finally {
++      await releaseDistributedLock(lockKey, lock);
++    }
+   },
+*** Update File: backend/src/middleware/rate-limit.middleware.ts
+@@
+ export const aiGenerationRateLimiter = rateLimit({
+@@
+   message: { success: false, error: { message: 'Generation limit reached, try again later.' } },
+ });
++
++export const manuscriptUploadRateLimiter = rateLimit({
++  windowMs: 24 * 60 * 60 * 1000,
++  max: 10,
++  standardHeaders: true,
++  legacyHeaders: false,
++  store: buildStore('rl:manuscript:'),
++  keyGenerator: (req) => {
++    const user = (req as Request & { user?: { id?: string } }).user;
++    return user?.id ? `user:${user.id}` : `ip:${req.ip}`;
++  },
++  message: { success: false, error: { message: 'Daily manuscript upload limit reached.' } },
++});
+*** Update File: backend/src/routes/v1/manuscript.routes.ts
+@@
+ import { MANUSCRIPT_MAX_FILE_SIZE_BYTES } from '../../validators/manuscript.validator';
++import { manuscriptUploadRateLimiter } from '../../middleware/rate-limit.middleware';
+@@
+-router.post('/:bookId/manuscript', upload.single('manuscript'), manuscriptController.upload);
++router.post('/:bookId/manuscript', manuscriptUploadRateLimiter, upload.single('manuscript'), manuscriptController.upload);
+*** Update File: backend/src/utils/text-extraction.ts
+@@
+ import { AppError } from './helpers';
++
++const MAX_EXTRACTED_CHARACTERS = 12_000_000;
++const EXTRACTION_TIMEOUT_MS = 120_000;
++
++function enforceExtractionBounds(result: ExtractedManuscriptText): ExtractedManuscriptText {
++  if (result.characterCount > MAX_EXTRACTED_CHARACTERS) {
++    throw AppError.badRequest('Manuscript contains too much extractable text.', 'MANUSCRIPT_TEXT_TOO_LARGE');
++  }
++  return result;
++}
++
++async function withExtractionTimeout<T>(promise: Promise<T>): Promise<T> {
++  let timer: ReturnType<typeof setTimeout> | undefined;
++  try {
++    return await Promise.race([
++      promise,
++      new Promise<T>((_, reject) => {
++        timer = setTimeout(() => reject(AppError.badRequest('Manuscript extraction timed out.', 'MANUSCRIPT_EXTRACTION_TIMEOUT')), EXTRACTION_TIMEOUT_MS);
++      }),
++    ]);
++  } finally {
++    if (timer) clearTimeout(timer);
++  }
++}
+@@
+ export async function extractManuscriptText(
+@@
+   switch (fileType) {
+     case ManuscriptFileType.TXT:
+-      return extractTxt(buffer);
++      return enforceExtractionBounds(await withExtractionTimeout(extractTxt(buffer)));
+     case ManuscriptFileType.DOCX:
+-      return extractDocx(buffer);
++      return enforceExtractionBounds(await withExtractionTimeout(extractDocx(buffer)));
+     case ManuscriptFileType.PDF:
+-      return extractPdf(buffer);
++      return enforceExtractionBounds(await withExtractionTimeout(extractPdf(buffer)));
+*** Update File: backend/package.json
+@@
+-    "node": ">=20.10.0"
++    "node": ">=20.19.0"
+@@
+-    "@prisma/client": "5.7.0",
++    "@prisma/client": "6.19.3",
+@@
+-    "prisma": "5.7.0",
++    "prisma": "6.19.3",
+*** Update File: frontend/package.json
+@@
+-    "next": "14.2.35",
+-    "react": "^18",
+-    "react-dom": "^18",
++    "next": "15.5.23",
++    "react": "^19.2.8",
++    "react-dom": "^19.2.8",
+@@
+-    "eslint-config-next": "14.2.5",
++    "eslint-config-next": "15.5.23",
+*** Update File: backend/Dockerfile
+@@
+-FROM node:20.10.0-alpine AS base
++FROM node:20.19.0-alpine AS base
+@@
+-RUN npm install --legacy-peer-deps
++RUN npm ci --legacy-peer-deps
+*** Add File: backend/prisma/migrations/20260821230000_hash_auth_tokens/migration.sql
++-- Existing reset/email-verification tokens were stored as plaintext.
++-- Hash them in-place before the application starts hashing newly issued tokens.
++CREATE EXTENSION IF NOT EXISTS pgcrypto;
++
++UPDATE "users"
++SET "resetToken" = encode(digest("resetToken", 'sha256'), 'hex')
++WHERE "resetToken" IS NOT NULL
++  AND length("resetToken") <> 64;
++
++UPDATE "users"
++SET "emailVerifyToken" = encode(digest("emailVerifyToken", 'sha256'), 'hex')
++WHERE "emailVerifyToken" IS NOT NULL
++  AND length("emailVerifyToken") <> 64;
+*** End Patch

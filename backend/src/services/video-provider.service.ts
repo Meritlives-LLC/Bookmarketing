@@ -21,9 +21,31 @@ class GeminiVeoProvider implements VideoProvider {
   private get baseUrl(): string {
     return process.env.GEMINI_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
   }
+  /**
+   * `videoModel` on a video project is user-supplied (CreateVideoProjectInput,
+   * set at project-creation time with no server-side validation upstream) and
+   * ends up interpolated directly into the outbound Gemini API URL path. Left
+   * unchecked, a user could point this server's outbound request at an
+   * arbitrary path/model — this is the single point every generateVideo()
+   * call passes through, so the allowlist is enforced here rather than
+   * relying on validation at every caller.
+   */
+  private static readonly ALLOWED_MODELS = new Set([
+    'veo-2.0-generate-001',
+    'veo-3.0-generate-001',
+    'veo-3.0-fast-generate-001',
+  ]);
+  private resolveAllowedModel(requested: string | undefined): string {
+    const candidate = requested || this.model;
+    if (!/^[a-zA-Z0-9._-]+$/.test(candidate) || !GeminiVeoProvider.ALLOWED_MODELS.has(candidate)) {
+      logger.warn('Rejected disallowed/malformed video model', { requested: candidate });
+      throw AppError.badRequest(`Unsupported video model: ${candidate}`, 'INVALID_VIDEO_MODEL');
+    }
+    return candidate;
+  }
   async generateVideo(req: VideoGenerationRequest): Promise<VideoGenerationResult> {
-    const model = req.model || this.model;
-    const url = `${this.baseUrl}/models/${model}:predictLongRunning?key=${this.apiKey}`;
+    const model = this.resolveAllowedModel(req.model);
+    const url = `${this.baseUrl}/models/${model}:predictLongRunning`;
     // Pass reference images when the model supports them (Veo image-to-video / reference).
     // Do not fake support — only include fields the current API accepts.
     const instance: Record<string, unknown> = { prompt: req.prompt };
@@ -44,7 +66,14 @@ class GeminiVeoProvider implements VideoProvider {
       },
     };
     try {
-      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await fetch(url, {
+        method: 'POST',
+        // The API key travels as a header, not a query-string parameter —
+        // query strings are far more likely to be captured in access logs,
+        // proxy logs, referrer headers, and error-reporting tools.
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
+        body: JSON.stringify(body),
+      });
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         const errorType = res.status === 429 ? 'RATE_LIMIT' : res.status === 400 ? 'INVALID_PROMPT' : 'UNKNOWN';
@@ -58,9 +87,16 @@ class GeminiVeoProvider implements VideoProvider {
     }
   }
   async getGenerationStatus(providerGenerationId: string): Promise<VideoGenerationResult> {
-    const url = `${this.baseUrl}/${providerGenerationId}?key=${this.apiKey}`;
+    // providerGenerationId is stored from an earlier provider response and
+    // later interpolated straight into this URL's path — validate its shape
+    // first so a corrupted/tampered value (e.g. containing "://" or "../")
+    // can't redirect this request to an unexpected host or path.
+    if (!/^[a-zA-Z0-9_\-./]+$/.test(providerGenerationId) || providerGenerationId.includes('..')) {
+      return { providerGenerationId, status: 'failed', errorMessage: 'Invalid operation id', errorType: 'UNKNOWN' };
+    }
+    const url = `${this.baseUrl}/${providerGenerationId}`;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: { 'x-goog-api-key': this.apiKey } });
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         return { providerGenerationId, status: 'failed', errorMessage: errText.slice(0, 200), errorType: 'UNKNOWN' };

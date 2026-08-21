@@ -16,6 +16,7 @@ import { compileShotPrompt, reasonCameraPlan, validateCameraPlan, normalizeShotC
 import { shotPromptCompilerService } from './shot-prompt-compiler.service';
 import { ffmpegAssemblyService } from './ffmpeg-assembly.service';
 import { storageService } from './storage.service';
+import { secureDownloadToBuffer, GOOGLE_PROVIDER_HOSTS } from '../utils/secure-remote-fetch';
 
 const STAGE_LABELS: Record<string, string> = {
   DRAFT: 'Draft', ANALYZING: 'Analyzing manuscript', PLANNING: 'Planning scenes',
@@ -993,10 +994,19 @@ export const videoProjectService = {
         // the shot RENDERED with that temporary URL when our own upload
         // fails would look successful right up until the link expires.
         try {
-          const res = await fetch(status.videoUrl);
-          if (!res.ok) throw new Error(`Provider video fetch failed: ${res.status}`);
+          // Provider-returned video URLs are not blindly fetched: only the
+          // known Gemini/Veo hosts are allowed, the response is streamed
+          // and size-capped rather than buffered in one shot via
+          // arrayBuffer(), and redirects/private-IP targets are rejected.
+          // This is the same SSRF-hardened path FFmpeg's clip downloader
+          // uses (see secure-remote-fetch.ts).
+          const videoBuffer = await secureDownloadToBuffer(status.videoUrl, {
+            allowedHosts: GOOGLE_PROVIDER_HOSTS,
+            maxBytes: 300 * 1024 * 1024,
+            allowedContentTypePrefixes: ['video/', 'application/octet-stream'],
+          });
           const storedUrl = await storageService.uploadBuffer(
-            Buffer.from(await res.arrayBuffer()),
+            videoBuffer,
             'video/mp4',
             `book-video/${projectId ?? 'unknown'}/shots/${shotId}`
           );

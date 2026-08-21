@@ -13,7 +13,12 @@ export function authenticate(req: Request, _res: Response, next: NextFunction): 
       throw AppError.unauthorized('Authentication token missing');
     }
 
-    const payload = jwt.verify(token, config.jwt.accessSecret) as JwtPayload;
+    // Explicitly pin the accepted algorithm rather than relying on the
+    // library's default inference from the secret type — an explicit
+    // allowlist is cheap defense-in-depth against algorithm-confusion
+    // attacks and keeps behavior stable if the secret type/config ever
+    // changes.
+    const payload = jwt.verify(token, config.jwt.accessSecret, { algorithms: ['HS256'] }) as JwtPayload;
 
     req.user = {
       id: payload.sub,
@@ -39,7 +44,7 @@ export function optionalAuthenticate(req: Request, _res: Response, next: NextFun
     const token = header?.startsWith('Bearer ') ? header.slice(7) : req.cookies?.accessToken;
     if (!token) return next();
 
-    const payload = jwt.verify(token, config.jwt.accessSecret) as JwtPayload;
+    const payload = jwt.verify(token, config.jwt.accessSecret, { algorithms: ['HS256'] }) as JwtPayload;
     req.user = {
       id: payload.sub,
       email: payload.email,
