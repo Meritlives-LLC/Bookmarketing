@@ -12,7 +12,12 @@ function signAccessToken(user: User): string {
 }
 
 function signRefreshToken(user: User): string {
-  const payload: JwtPayload = { sub: user.id, email: user.email, role: user.role };
+  const payload: JwtPayload = {
+    sub: user.id,
+    email: user.email,
+    role: user.role,
+    tokenVersion: user.tokenVersion,
+  };
   return jwt.sign(payload, config.jwt.refreshSecret, { expiresIn: config.jwt.refreshExpiresIn });
 }
 
@@ -72,10 +77,21 @@ export const authService = {
       throw AppError.unauthorized('User not found', 'USER_NOT_FOUND');
     }
 
+    if (payload.tokenVersion !== user.tokenVersion) {
+      // Token was valid and unexpired, but has been revoked by a logout or
+      // password reset that happened since it was issued.
+      throw AppError.unauthorized('Session has been revoked', 'REFRESH_REVOKED');
+    }
+
     const accessToken = signAccessToken(user);
     const newRefreshToken = signRefreshToken(user);
 
     return { user, accessToken, refreshToken: newRefreshToken };
+  },
+
+  /** Invalidates every outstanding refresh token for this user. */
+  async logout(userId: string): Promise<void> {
+    await userRepository.bumpTokenVersion(userId);
   },
 
   async requestPasswordReset(email: string) {
@@ -97,11 +113,9 @@ export const authService = {
     const passwordHash = await hashPassword(newPassword);
     await userRepository.update(user.id, { passwordHash });
     await userRepository.clearResetToken(user.id);
-    return user;
-  },
-
-  async verifyEmail(token: string) {
-    const user = await userRepository.findByEmail(token).catch(() => null);
+    // A refresh token issued before the reset (e.g. stolen from localStorage
+    // via XSS) must not survive it — bump tokenVersion to revoke all of them.
+    await userRepository.bumpTokenVersion(user.id);
     return user;
   },
 };

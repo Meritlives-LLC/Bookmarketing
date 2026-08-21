@@ -36,6 +36,29 @@ function requiredSecret(name: string, insecureValues: string[], fallback?: strin
   return value;
 }
 
+/**
+ * Parses CORS_ORIGIN into an allowlist. `*` is rejected outright in
+ * production: corsMiddleware uses a custom origin callback (needed for
+ * credentialed requests), which means a `*` entry doesn't send a literal
+ * wildcard header — it reflects whatever Origin the request sent, back with
+ * `Access-Control-Allow-Credentials: true`. That's an open CORS policy
+ * letting any site make authenticated, cookie-credentialed requests against
+ * this API. Same "never silently ship an insecure default" philosophy as
+ * requiredSecret() above.
+ */
+function corsOrigins(): string[] {
+  const raw = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
+  const origins = raw.split(',').map((o) => o.trim());
+  if (isProduction && origins.includes('*')) {
+    throw new Error(
+      'CORS_ORIGIN is set to "*" in production. This allows any website to make ' +
+        'authenticated, cookie-credentialed requests against this API. Set it to your ' +
+        'exact frontend origin(s), comma-separated, instead.'
+    );
+  }
+  return origins;
+}
+
 export const config = {
   env: process.env.NODE_ENV ?? 'development',
   isProduction: process.env.NODE_ENV === 'production',
@@ -96,7 +119,7 @@ export const config = {
   },
 
   cors: {
-    origin: (process.env.CORS_ORIGIN ?? 'http://localhost:3000').split(','),
+    origin: corsOrigins(),
   },
 
   rateLimit: {

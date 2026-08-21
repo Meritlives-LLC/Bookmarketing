@@ -37,6 +37,11 @@ export const userRepository = {
     return prisma.user.update({ where: { id }, data: { lastLoginAt: new Date() } });
   },
 
+  /** Invalidates every outstanding refresh token for this user (logout, password reset). */
+  bumpTokenVersion(id: string): Promise<User> {
+    return prisma.user.update({ where: { id }, data: { tokenVersion: { increment: 1 } } });
+  },
+
   setResetToken(id: string, token: string, expires: Date): Promise<User> {
     return prisma.user.update({
       where: { id },

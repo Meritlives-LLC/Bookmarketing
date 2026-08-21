@@ -235,6 +235,14 @@ model User {
   avatarUrl         String?
   credits           Int       @default(10)
   emailPreferences  Json      @default("{\"auditCompleted\": true, \"weeklyReport\": true}")
+  /// Bumped on logout and password reset. Embedded in every refresh token's
+  /// payload; a refresh token whose tokenVersion doesn't match the current
+  /// value is rejected. Access tokens don't carry it (they're short-lived
+  /// and checking it per-request would mean a DB hit on every authenticated
+  /// call) — this bounds a stolen/leaked refresh token's usable lifetime to
+  /// "until the user next logs out or resets their password" instead of its
+  /// full 7-day expiry regardless of what the user does.
+  tokenVersion      Int       @default(0)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   lastLoginAt       DateTime?

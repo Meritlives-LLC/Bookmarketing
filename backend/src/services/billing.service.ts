@@ -14,6 +14,15 @@ const PRICE_TO_PLAN: Record<string, 'STARTER' | 'PRO' | 'AGENCY'> = {
 
 export const billingService = {
   async createCheckoutSession(userId: string, priceId: string) {
+    // priceId comes straight from the client — only ever accept one of our
+    // three configured plan prices. Without this, an arbitrary Stripe price
+    // ID could be passed through to session creation (e.g. a coupon-priced
+    // or unrelated price on the same Stripe account) with no application-side
+    // check on what it actually corresponds to.
+    if (!Object.prototype.hasOwnProperty.call(PRICE_TO_PLAN, priceId)) {
+      throw AppError.badRequest('Unrecognized price', 'INVALID_PRICE_ID');
+    }
+
     const user = await userRepository.findById(userId);
     if (!user) throw AppError.notFound('User not found');
 

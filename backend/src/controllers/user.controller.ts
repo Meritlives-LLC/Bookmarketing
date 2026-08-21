@@ -53,10 +53,17 @@ export const authController = {
     }
   },
 
-  async logout(_req: Request, res: Response) {
-    res.clearCookie('accessToken');
-    res.clearCookie('refreshToken');
-    res.json({ success: true, data: { message: 'Logged out' } });
+  async logout(req: Request, res: Response, next: NextFunction) {
+    try {
+      if (req.user) {
+        await authService.logout(req.user.id);
+      }
+      res.clearCookie('accessToken');
+      res.clearCookie('refreshToken');
+      res.json({ success: true, data: { message: 'Logged out' } });
+    } catch (error) {
+      next(error);
+    }
   },
 
   async refresh(req: Request, res: Response, next: NextFunction) {
