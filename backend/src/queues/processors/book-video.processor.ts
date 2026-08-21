@@ -57,7 +57,7 @@ export async function processBookVideoJob(job: Job): Promise<void> {
       const { videoProjectId, sceneId } = job.data as { videoProjectId: string; sceneId?: string };
       const scenes = sceneId
         ? await prisma.videoScene.findMany({ where: { id: sceneId } })
-        : await prisma.videoScene.findMany({ where: { videoProjectId, status: 'RENDERED' }, orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }] });
+        : await prisma.videoScene.findMany({ where: { videoProjectId, status: 'RENDERED' }, orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }] });
       for (const scene of scenes) {
         try {
           const { srt } = await subtitleService.generateForScene(scene.id);
@@ -75,7 +75,7 @@ export async function processBookVideoJob(job: Job): Promise<void> {
       const { videoProjectId } = job.data as { videoProjectId: string };
       const project = await videoProjectRepository.findById(videoProjectId);
       if (!project) return;
-      const scenes = await prisma.videoScene.findMany({ where: { videoProjectId }, orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }] });
+      const scenes = await prisma.videoScene.findMany({ where: { videoProjectId }, orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }] });
       const rendered = scenes.filter((s) => s.status === 'RENDERED' && s.videoUrl);
       const failed = scenes.filter((s) => s.status === 'FAILED');
       if (!rendered.length) {
@@ -97,23 +97,41 @@ export async function processBookVideoJob(job: Job): Promise<void> {
       const { srt, vtt } = await subtitleService.assembleChapterSubtitles(sceneIds, offsets);
       const ass = ffmpegAssemblyService.srtToAss(srt, project.subtitleStyle || 'CINEMATIC');
       const ffmpegOk = await ffmpegAssemblyService.isAvailable();
+      const requiresBurnedIn = project.subtitleEnabled && project.subtitleMode === 'BURNED_IN';
+      // A project MUST NOT become COMPLETED if any required scene failed —
+      // FFmpeg happily assembles the scenes that DID render, but that is
+      // not the same as the film being done. All scenes must have
+      // succeeded (no FAILED scenes at all) before this can be COMPLETED.
+      const allScenesSucceeded = failed.length === 0 && rendered.length === scenes.length;
       if (ffmpegOk) {
         try {
           const result = await ffmpegAssemblyService.assemble({
             projectId: videoProjectId,
             clips: rendered.map((s) => ({ videoUrl: s.videoUrl!, durationSec: s.actualDurationSec ?? s.estimatedDurationSec ?? 6 })),
             fullSrt: srt, fullVtt: vtt, fullAss: ass,
-            burnSubtitles: project.subtitleEnabled && project.subtitleMode === 'BURNED_IN',
+            burnSubtitles: requiresBurnedIn,
             subtitleStyle: project.subtitleStyle || 'CINEMATIC',
           });
+          // Burned-in subtitles were explicitly requested but the encode
+          // step never produced a subtitleVideoKey — do not claim the
+          // burned-in output succeeded, and do not mark the project
+          // COMPLETED, since the requested required output does not exist.
+          const burnedInSatisfied = !requiresBurnedIn || Boolean(result.subtitleVideoKey);
+          const canComplete = allScenesSucceeded && burnedInSatisfied;
           await videoProjectRepository.update(videoProjectId, {
             finalVideoUrl: result.cleanVideoKey, cleanVideoUrl: result.cleanVideoKey,
             subtitleVideoUrl: result.subtitleVideoKey ?? null,
             srtUrl: result.srtKey ?? null, vttUrl: result.vttKey ?? null, assUrl: result.assKey ?? null,
-            thumbnailUrl: result.thumbnailKey ?? null, progress: 100, status: 'COMPLETED',
-            errorMessage: failed.length ? `${failed.length} scene(s) failed; assembled ${rendered.length}` : null,
+            thumbnailUrl: result.thumbnailKey ?? null,
+            progress: canComplete ? 100 : 95,
+            status: canComplete ? 'COMPLETED' : 'FAILED',
+            errorMessage: canComplete
+              ? null
+              : !burnedInSatisfied
+                ? `Burned-in subtitles were requested but could not be produced. Clean video and soft subtitles are available; retry to attempt burn-in again.`
+                : `${failed.length} scene(s) failed; assembled ${rendered.length} of ${scenes.length}. Retry failed scenes then re-render.`,
           });
-          logger.info('Full FFmpeg assembly complete', { videoProjectId, clips: rendered.length });
+          logger.info('Full FFmpeg assembly complete', { videoProjectId, clips: rendered.length, completed: canComplete });
           break;
         } catch (error) {
           logger.error('FFmpeg assembly failed — soft fallback', { error: (error as Error).message });
@@ -135,7 +153,15 @@ export async function processBookVideoJob(job: Job): Promise<void> {
       // user, so that case must always resolve to FAILED with an honest
       // error, never COMPLETED.
       const totalNonFailedScenes = scenes.filter((s) => s.status !== 'FAILED').length;
-      const singleSceneFilm = rendered.length === 1 && totalNonFailedScenes === 1;
+      // A single-scene project may only be treated as "complete without
+      // real FFmpeg concatenation" when that one scene is the ENTIRE
+      // project (no other scenes at all, failed or otherwise) — otherwise
+      // this would silently drop every other scene from the final film
+      // while still reporting completion. Burned-in subtitles cannot be
+      // honored on this raw-clip fallback path (no encode occurred), so a
+      // required BURNED_IN mode never allows the fallback to COMPLETE.
+      const singleSceneFilm =
+        rendered.length === 1 && totalNonFailedScenes === 1 && scenes.length === 1 && !requiresBurnedIn;
       const assemblyWasAttemptedButFailed = ffmpegOk && !singleSceneFilm;
       await videoProjectRepository.update(videoProjectId, {
         finalVideoUrl: singleSceneFilm ? rendered[0].videoUrl : null,

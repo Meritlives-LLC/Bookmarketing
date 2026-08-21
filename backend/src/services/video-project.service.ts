@@ -9,7 +9,7 @@ import { logger } from '../utils/logger';
 import { CreateVideoProjectInput, VideoProjectProgress } from '../types/book-video.types';
 import {
   enqueueAnalyzeProject, enqueuePlanScenes, enqueueGenerateSceneVideo,
-  enqueueGenerateSubtitles, enqueueAssembleFilm,
+  enqueueGenerateSubtitles, enqueueAssembleFilm, isQueueAvailable,
 } from '../queues/book-video.queue';
 import { getVideoProvider } from './video-provider.service';
 import { compileShotPrompt, reasonCameraPlan, validateCameraPlan, normalizeShotCamera, validateCameraContinuity, suggestContinuityFix, type ShotCameraPlan } from '../cinematography';
@@ -81,17 +81,31 @@ export const videoProjectService = {
     if (['ANALYZING', 'PLANNING', 'GENERATING_VIDEO', 'ASSEMBLING'].includes(project.status)) {
       throw AppError.conflict('Project is already processing', 'PROJECT_BUSY');
     }
+    if (!(await isQueueAvailable())) {
+      throw AppError.serviceUnavailable('Video generation is temporarily unavailable (queue infrastructure unreachable). Please try again shortly.', 'QUEUE_UNAVAILABLE');
+    }
     await videoProjectRepository.updateStatus(projectId, 'ANALYZING', { progress: 1, errorMessage: null });
     const job = await enqueueAnalyzeProject({ videoProjectId: projectId, bookId: project.bookId, userId });
-    return { projectId, jobId: job?.id ?? null, status: 'ANALYZING' };
+    if (!job?.id) {
+      await videoProjectRepository.updateStatus(projectId, 'FAILED', { errorMessage: 'Could not queue analysis due to an infrastructure error. Please retry.' });
+      throw AppError.serviceUnavailable('Could not queue analysis. Please retry.', 'QUEUE_ENQUEUE_FAILED');
+    }
+    return { projectId, jobId: job.id, status: 'ANALYZING' };
   },
   async startPlanning(userId: string, projectId: string) {
     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
     if (!project) throw AppError.notFound('Video project not found');
     if (!project.filmBible) throw AppError.badRequest('Run analysis first.');
+    if (!(await isQueueAvailable())) {
+      throw AppError.serviceUnavailable('Video generation is temporarily unavailable (queue infrastructure unreachable). Please try again shortly.', 'QUEUE_UNAVAILABLE');
+    }
     await videoProjectRepository.updateStatus(projectId, 'PLANNING', { progress: 61 });
     const job = await enqueuePlanScenes({ videoProjectId: projectId, bookId: project.bookId });
-    return { projectId, jobId: job?.id ?? null };
+    if (!job?.id) {
+      await videoProjectRepository.updateStatus(projectId, 'FAILED', { errorMessage: 'Could not queue scene planning due to an infrastructure error. Please retry.' });
+      throw AppError.serviceUnavailable('Could not queue scene planning. Please retry.', 'QUEUE_ENQUEUE_FAILED');
+    }
+    return { projectId, jobId: job.id };
   },
   async startGeneration(userId: string, projectId: string, opts?: { sceneId?: string }) {
     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
@@ -103,12 +117,24 @@ export const videoProjectService = {
     if (project.status === 'GENERATING_VIDEO') {
       throw AppError.conflict('Video generation is already running for this project', 'PROJECT_BUSY');
     }
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw AppError.notFound('User not found');
+    const userExists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+    if (!userExists) throw AppError.notFound('User not found');
     const scenes = opts?.sceneId
       ? project.scenes.filter((s) => s.id === opts.sceneId)
       : project.scenes.filter((s) => s.status === 'PROMPT_READY' || s.status === 'FAILED');
     if (!scenes.length) throw AppError.badRequest('No scenes ready for generation.');
+
+    // P0: verify the queue/Redis infrastructure is actually reachable
+    // BEFORE committing a paid generation. If Redis is down, the request
+    // must fail cleanly with no credits charged — never silently continue
+    // and enqueue nothing.
+    if (!(await isQueueAvailable())) {
+      throw AppError.serviceUnavailable(
+        'Video generation is temporarily unavailable (queue infrastructure unreachable). You have not been charged — please try again shortly.',
+        'QUEUE_UNAVAILABLE'
+      );
+    }
+
     // Charge per shot that still needs provider generation (not per scene, not for subtitle/ffmpeg)
     const sceneIds = scenes.map((s) => s.id);
     const pendingShots = await prisma.videoShot.count({
@@ -118,24 +144,87 @@ export const videoProjectService = {
       },
     });
     const cost = Math.max(1, pendingShots);
-    if (user.credits < cost) throw AppError.badRequest(`Insufficient credits. Need ${cost} (shots), have ${user.credits}.`, 'INSUFFICIENT_CREDITS');
-    await prisma.$transaction(async (tx) => {
-      await tx.user.update({ where: { id: userId }, data: { credits: { decrement: cost } } });
-      await tx.billingEvent.create({
+
+    // P0: atomic, race-safe credit reservation. A plain
+    // "read credits -> check -> decrement" sequence lets two concurrent
+    // requests both observe the same balance and both decrement, allowing
+    // overspend. updateMany's WHERE clause is evaluated by Postgres as part
+    // of the same atomic statement, so only one of two concurrent requests
+    // racing for the same balance can ever match `credits gte cost`; the
+    // loser's updateMany matches zero rows and count is 0.
+    const reservation = await prisma.$transaction(async (tx) => {
+      const result = await tx.user.updateMany({
+        where: { id: userId, credits: { gte: cost } },
+        data: { credits: { decrement: cost } },
+      });
+      if (result.count === 0) return null;
+      const billingEvent = await tx.billingEvent.create({
         data: {
           userId,
           type: 'video_generation_charge',
           amount: cost,
-          metadata: { videoProjectId: projectId, sceneCount: scenes.length, shotCount: pendingShots },
+          metadata: { videoProjectId: projectId, sceneCount: scenes.length, shotCount: pendingShots, status: 'reserved' },
         },
       });
+      return billingEvent;
     });
-    await videoProjectRepository.updateStatus(projectId, 'GENERATING_VIDEO', { progress: 72, errorMessage: null });
-    const jobIds: string[] = [];
-    for (const scene of scenes) {
-      const job = await enqueueGenerateSceneVideo({ videoProjectId: projectId, sceneId: scene.id });
-      if (job?.id) jobIds.push(String(job.id));
+    if (!reservation) {
+      const current = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
+      throw AppError.badRequest(`Insufficient credits. Need ${cost} (shots), have ${current?.credits ?? 0}.`, 'INSUFFICIENT_CREDITS');
     }
+
+    await videoProjectRepository.updateStatus(projectId, 'GENERATING_VIDEO', { progress: 72, errorMessage: null });
+
+    // Enqueue every scene's generation job. Credits are already reserved
+    // at this point, so if enqueueing fails partway through (e.g. Redis
+    // drops mid-request despite the pre-flight check above), the
+    // reservation must be compensated rather than left charged against
+    // work that was never actually queued.
+    const jobIds: string[] = [];
+    let enqueueError: unknown = null;
+    try {
+      for (const scene of scenes) {
+        const job = await enqueueGenerateSceneVideo({ videoProjectId: projectId, sceneId: scene.id });
+        if (!job?.id) {
+          throw new Error(`Failed to enqueue generation for scene ${scene.id} — queue returned no job id`);
+        }
+        jobIds.push(String(job.id));
+      }
+    } catch (error) {
+      enqueueError = error;
+    }
+
+    if (enqueueError || jobIds.length !== scenes.length) {
+      // Compensate: refund the full reservation, record an explicit
+      // reversal audit record (idempotent — tied to the original
+      // reservation's id so retries of this compensation can't double
+      // refund), and put the project back into a retryable, non-charged
+      // state instead of leaving it stuck in GENERATING_VIDEO.
+      await prisma.$transaction(async (tx) => {
+        const alreadyReversed = await tx.billingEvent.findFirst({
+          where: { type: 'video_generation_charge_reversal', metadata: { path: ['reversalOf'], equals: reservation.id } },
+        });
+        if (!alreadyReversed) {
+          await tx.user.update({ where: { id: userId }, data: { credits: { increment: cost } } });
+          await tx.billingEvent.create({
+            data: {
+              userId,
+              type: 'video_generation_charge_reversal',
+              amount: cost,
+              metadata: { videoProjectId: projectId, reversalOf: reservation.id, reason: 'queue enqueue failure' },
+            },
+          });
+        }
+      });
+      await videoProjectRepository.updateStatus(projectId, 'FAILED', {
+        errorMessage: 'Could not queue video generation due to an infrastructure error. You have not been charged — please retry.',
+      });
+      throw AppError.serviceUnavailable(
+        'Video generation could not be queued due to an infrastructure error. Your credits have been refunded — please retry.',
+        'QUEUE_ENQUEUE_FAILED'
+      );
+    }
+
     return { projectId, enqueued: scenes.length, jobIds, creditsCharged: cost };
   },
   async regenerateScene(userId: string, sceneId: string) {
@@ -527,16 +616,30 @@ export const videoProjectService = {
     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
     if (!project) throw AppError.notFound('Video project not found');
     if (!project.subtitleEnabled) throw AppError.badRequest('Subtitles are disabled');
+    if (!(await isQueueAvailable())) {
+      throw AppError.serviceUnavailable('Video generation is temporarily unavailable (queue infrastructure unreachable). Please try again shortly.', 'QUEUE_UNAVAILABLE');
+    }
     await videoProjectRepository.updateStatus(projectId, 'GENERATING_SUBTITLES');
     const job = await enqueueGenerateSubtitles({ videoProjectId: projectId });
-    return { projectId, jobId: job?.id ?? null };
+    if (!job?.id) {
+      await videoProjectRepository.updateStatus(projectId, 'FAILED', { errorMessage: 'Could not queue subtitle generation due to an infrastructure error. Please retry.' });
+      throw AppError.serviceUnavailable('Could not queue subtitle generation. Please retry.', 'QUEUE_ENQUEUE_FAILED');
+    }
+    return { projectId, jobId: job.id };
   },
   async renderFinal(userId: string, projectId: string) {
     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
     if (!project) throw AppError.notFound('Video project not found');
+    if (!(await isQueueAvailable())) {
+      throw AppError.serviceUnavailable('Video generation is temporarily unavailable (queue infrastructure unreachable). Please try again shortly.', 'QUEUE_UNAVAILABLE');
+    }
     await videoProjectRepository.updateStatus(projectId, 'ASSEMBLING', { progress: 90 });
     const job = await enqueueAssembleFilm({ videoProjectId: projectId });
-    return { projectId, jobId: job?.id ?? null };
+    if (!job?.id) {
+      await videoProjectRepository.updateStatus(projectId, 'FAILED', { errorMessage: 'Could not queue final assembly due to an infrastructure error. Please retry.' });
+      throw AppError.serviceUnavailable('Could not queue final assembly. Please retry.', 'QUEUE_ENQUEUE_FAILED');
+    }
+    return { projectId, jobId: job.id };
   },
   /**
    * Generate all shots for a scene, then FFmpeg-assemble them into scene.videoUrl.
@@ -859,27 +962,70 @@ export const videoProjectService = {
     provider: ReturnType<typeof getVideoProvider>,
     projectId?: string
   ): Promise<void> {
+    let consecutivePollErrors = 0;
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 10_000));
       const status = await provider.getGenerationStatus(providerGenerationId);
+
+      // A poll-call error (network blip, transient 5xx) is NOT the same as
+      // the provider reporting genuine failure — treating every hiccup as a
+      // terminal failure would kill an otherwise-succeeding, already-paid
+      // generation and (since FAILED shots are eligible for resubmission)
+      // risk a second, duplicate billed provider call. Only a small number
+      // of *consecutive* errors is treated as dead; an isolated blip is
+      // retried on the next poll tick.
+      if (status.status === 'failed' && status.errorType === 'TIMEOUT' && !status.videoUrl) {
+        consecutivePollErrors++;
+        if (consecutivePollErrors < 3) {
+          logger.warn('Transient error polling provider status — will retry', {
+            shotId, providerGenerationId, attempt: consecutivePollErrors,
+          });
+          continue;
+        }
+      } else {
+        consecutivePollErrors = 0;
+      }
+
       if (status.status === 'completed' && status.videoUrl) {
-        let storedUrl = status.videoUrl;
+        // P0: a provider-generated video is not durably RENDERED until it
+        // has been downloaded and re-uploaded to our own storage. A
+        // provider URL is typically short-lived/signed — silently marking
+        // the shot RENDERED with that temporary URL when our own upload
+        // fails would look successful right up until the link expires.
         try {
           const res = await fetch(status.videoUrl);
-          if (res.ok) {
-            storedUrl = await storageService.uploadBuffer(
-              Buffer.from(await res.arrayBuffer()),
-              'video/mp4',
-              `book-video/${projectId ?? 'unknown'}/shots/${shotId}`
-            );
-          }
+          if (!res.ok) throw new Error(`Provider video fetch failed: ${res.status}`);
+          const storedUrl = await storageService.uploadBuffer(
+            Buffer.from(await res.arrayBuffer()),
+            'video/mp4',
+            `book-video/${projectId ?? 'unknown'}/shots/${shotId}`
+          );
+          await prisma.videoShot.update({
+            where: { id: shotId },
+            data: { status: 'RENDERED', videoUrl: storedUrl, errorMessage: null },
+          });
         } catch (e) {
-          logger.warn('Could not re-upload shot video', { error: (e as Error).message });
+          // Durable storage failed even though the provider succeeded.
+          // Preserve providerGenerationId so a retry resumes/re-fetches
+          // this same completed generation instead of submitting (and
+          // billing for) a brand new one — processShotVideo's idempotency
+          // guard only resumes GENERATING shots with a live
+          // providerGenerationId, so keep status GENERATING here rather
+          // than FAILED (which would clear that path) and let the next
+          // regeneration attempt re-download from the provider.
+          logger.error('Durable storage upload failed after provider success — shot NOT marked rendered', {
+            shotId, providerGenerationId, error: (e as Error).message,
+          });
+          await prisma.videoShot.update({
+            where: { id: shotId },
+            data: {
+              status: 'FAILED',
+              errorMessage: `Video generated by provider but could not be saved to durable storage: ${(e as Error).message}`,
+              lastErrorType: 'STORAGE_ERROR' as ProviderErrorType,
+              retryCount: { increment: 1 },
+            },
+          });
         }
-        await prisma.videoShot.update({
-          where: { id: shotId },
-          data: { status: 'RENDERED', videoUrl: storedUrl, errorMessage: null },
-        });
         return;
       }
       if (status.status === 'failed') {
@@ -894,15 +1040,19 @@ export const videoProjectService = {
         });
         return;
       }
+      // status === 'processing' (or unknown-but-not-failed): keep polling.
     }
-    await prisma.videoShot.update({
-      where: { id: shotId },
-      data: {
-        status: 'FAILED',
-        errorMessage: 'Timed out waiting for video provider',
-        lastErrorType: 'TIMEOUT',
-        retryCount: { increment: 1 },
-      },
+    // Our polling window elapsed without the provider reporting completion
+    // or failure — this does NOT mean the provider generation itself
+    // failed; it may still be processing on the provider's side. Do not
+    // mark the shot FAILED here: that would make it eligible for immediate
+    // resubmission (a second, duplicate billed provider call) for work
+    // that might still complete. Instead leave status/providerGenerationId
+    // as-is; processShotVideo and regenerateScene both already treat a
+    // GENERATING shot older than SHOT_GENERATION_STALE_MS as safely
+    // resumable/re-triable, which is the correct recovery path here.
+    logger.warn('Provider poll window elapsed without a terminal status — leaving shot for staleness-based recovery', {
+      shotId, providerGenerationId,
     });
   },
 };

@@ -17,7 +17,7 @@ export const videoProjectRepository = {
       include: {
         filmBible: true, characters: true, locations: true, props: true,
         scenes: {
-          orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }],
+          orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }],
           include: { shots: { orderBy: { shotNumber: 'asc' } }, subtitleCues: { orderBy: { sequence: 'asc' } } },
         },
         manuscript: { include: { chapters: { orderBy: { chapterNumber: 'asc' } } } },
@@ -31,7 +31,7 @@ export const videoProjectRepository = {
       include: {
         filmBible: true, characters: true, locations: true, props: true,
         scenes: {
-          orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }],
+          orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }],
           include: { shots: { orderBy: { shotNumber: 'asc' } }, subtitleCues: { orderBy: { sequence: 'asc' } } },
         },
         manuscript: { include: { chapters: { orderBy: { chapterNumber: 'asc' } } } },

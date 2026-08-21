@@ -60,6 +60,31 @@ export async function enqueueAssembleFilm(data: AssembleJobData) {
 }
 
 /**
+ * Verify the Book-to-Film queue infrastructure is actually reachable, not
+ * merely configured. Book-to-Film generation is paid — charging a user's
+ * credits and then discovering Redis is unreachable (network partition,
+ * Redis instance down, auth failure, etc.) is exactly the failure mode this
+ * guards against. `bookVideoQueue` being non-null only means a URL was
+ * parsed; it says nothing about whether the server is actually up, so this
+ * pings the real connection with a short timeout before any credit is
+ * touched.
+ */
+export async function isQueueAvailable(): Promise<boolean> {
+  if (!bookVideoQueue) return false;
+  try {
+    const client = await bookVideoQueue.client;
+    const pong = await Promise.race([
+      client.ping(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Redis ping timed out')), 3000)),
+    ]);
+    return pong === 'PONG';
+  } catch (error) {
+    logger.warn('Book-to-Film queue health check failed', { error: (error as Error).message });
+    return false;
+  }
+}
+
+/**
  * Look up whether a live (waiting/active/delayed) job already exists for a
  * given deterministic jobId, without enqueuing anything. Used by startup
  * reconciliation to decide whether DB-reported "in progress" work actually

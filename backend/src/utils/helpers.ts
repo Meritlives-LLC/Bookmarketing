@@ -39,6 +39,9 @@ export class AppError extends Error {
   static internal(message = 'Internal server error', code?: string) {
     return new AppError(message, 500, code);
   }
+  static serviceUnavailable(message = 'Service unavailable', code?: string) {
+    return new AppError(message, 503, code);
+  }
 }
 
 export function asyncHandler<T extends (...args: any[]) => Promise<any>>(fn: T) {

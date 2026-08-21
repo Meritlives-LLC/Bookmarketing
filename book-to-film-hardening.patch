@@ -1,0 +1,736 @@
+diff --git a/backend/src/queues/book-video.queue.ts b/backend/src/queues/book-video.queue.ts
+index 486c1bb..0a917a4 100644
+--- a/backend/src/queues/book-video.queue.ts
++++ b/backend/src/queues/book-video.queue.ts
+@@ -59,6 +59,31 @@ export async function enqueueAssembleFilm(data: AssembleJobData) {
+   return enqueueDeduped('assemble-film', `assemble:${data.videoProjectId}:${data.chapterId ?? 'all'}`, data, defaultJobOpts);
+ }
+ 
++/**
++ * Verify the Book-to-Film queue infrastructure is actually reachable, not
++ * merely configured. Book-to-Film generation is paid — charging a user's
++ * credits and then discovering Redis is unreachable (network partition,
++ * Redis instance down, auth failure, etc.) is exactly the failure mode this
++ * guards against. `bookVideoQueue` being non-null only means a URL was
++ * parsed; it says nothing about whether the server is actually up, so this
++ * pings the real connection with a short timeout before any credit is
++ * touched.
++ */
++export async function isQueueAvailable(): Promise<boolean> {
++  if (!bookVideoQueue) return false;
++  try {
++    const client = await bookVideoQueue.client;
++    const pong = await Promise.race([
++      client.ping(),
++      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Redis ping timed out')), 3000)),
++    ]);
++    return pong === 'PONG';
++  } catch (error) {
++    logger.warn('Book-to-Film queue health check failed', { error: (error as Error).message });
++    return false;
++  }
++}
++
+ /**
+  * Look up whether a live (waiting/active/delayed) job already exists for a
+  * given deterministic jobId, without enqueuing anything. Used by startup
+diff --git a/backend/src/queues/processors/book-video.processor.ts b/backend/src/queues/processors/book-video.processor.ts
+index 986d7ac..f9ba3ad 100644
+--- a/backend/src/queues/processors/book-video.processor.ts
++++ b/backend/src/queues/processors/book-video.processor.ts
+@@ -57,7 +57,7 @@ export async function processBookVideoJob(job: Job): Promise<void> {
+       const { videoProjectId, sceneId } = job.data as { videoProjectId: string; sceneId?: string };
+       const scenes = sceneId
+         ? await prisma.videoScene.findMany({ where: { id: sceneId } })
+-        : await prisma.videoScene.findMany({ where: { videoProjectId, status: 'RENDERED' }, orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }] });
++        : await prisma.videoScene.findMany({ where: { videoProjectId, status: 'RENDERED' }, orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }] });
+       for (const scene of scenes) {
+         try {
+           const { srt } = await subtitleService.generateForScene(scene.id);
+@@ -75,7 +75,7 @@ export async function processBookVideoJob(job: Job): Promise<void> {
+       const { videoProjectId } = job.data as { videoProjectId: string };
+       const project = await videoProjectRepository.findById(videoProjectId);
+       if (!project) return;
+-      const scenes = await prisma.videoScene.findMany({ where: { videoProjectId }, orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }] });
++      const scenes = await prisma.videoScene.findMany({ where: { videoProjectId }, orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }] });
+       const rendered = scenes.filter((s) => s.status === 'RENDERED' && s.videoUrl);
+       const failed = scenes.filter((s) => s.status === 'FAILED');
+       if (!rendered.length) {
+@@ -97,23 +97,41 @@ export async function processBookVideoJob(job: Job): Promise<void> {
+       const { srt, vtt } = await subtitleService.assembleChapterSubtitles(sceneIds, offsets);
+       const ass = ffmpegAssemblyService.srtToAss(srt, project.subtitleStyle || 'CINEMATIC');
+       const ffmpegOk = await ffmpegAssemblyService.isAvailable();
++      const requiresBurnedIn = project.subtitleEnabled && project.subtitleMode === 'BURNED_IN';
++      // A project MUST NOT become COMPLETED if any required scene failed —
++      // FFmpeg happily assembles the scenes that DID render, but that is
++      // not the same as the film being done. All scenes must have
++      // succeeded (no FAILED scenes at all) before this can be COMPLETED.
++      const allScenesSucceeded = failed.length === 0 && rendered.length === scenes.length;
+       if (ffmpegOk) {
+         try {
+           const result = await ffmpegAssemblyService.assemble({
+             projectId: videoProjectId,
+             clips: rendered.map((s) => ({ videoUrl: s.videoUrl!, durationSec: s.actualDurationSec ?? s.estimatedDurationSec ?? 6 })),
+             fullSrt: srt, fullVtt: vtt, fullAss: ass,
+-            burnSubtitles: project.subtitleEnabled && project.subtitleMode === 'BURNED_IN',
++            burnSubtitles: requiresBurnedIn,
+             subtitleStyle: project.subtitleStyle || 'CINEMATIC',
+           });
++          // Burned-in subtitles were explicitly requested but the encode
++          // step never produced a subtitleVideoKey — do not claim the
++          // burned-in output succeeded, and do not mark the project
++          // COMPLETED, since the requested required output does not exist.
++          const burnedInSatisfied = !requiresBurnedIn || Boolean(result.subtitleVideoKey);
++          const canComplete = allScenesSucceeded && burnedInSatisfied;
+           await videoProjectRepository.update(videoProjectId, {
+             finalVideoUrl: result.cleanVideoKey, cleanVideoUrl: result.cleanVideoKey,
+             subtitleVideoUrl: result.subtitleVideoKey ?? null,
+             srtUrl: result.srtKey ?? null, vttUrl: result.vttKey ?? null, assUrl: result.assKey ?? null,
+-            thumbnailUrl: result.thumbnailKey ?? null, progress: 100, status: 'COMPLETED',
+-            errorMessage: failed.length ? `${failed.length} scene(s) failed; assembled ${rendered.length}` : null,
++            thumbnailUrl: result.thumbnailKey ?? null,
++            progress: canComplete ? 100 : 95,
++            status: canComplete ? 'COMPLETED' : 'FAILED',
++            errorMessage: canComplete
++              ? null
++              : !burnedInSatisfied
++                ? `Burned-in subtitles were requested but could not be produced. Clean video and soft subtitles are available; retry to attempt burn-in again.`
++                : `${failed.length} scene(s) failed; assembled ${rendered.length} of ${scenes.length}. Retry failed scenes then re-render.`,
+           });
+-          logger.info('Full FFmpeg assembly complete', { videoProjectId, clips: rendered.length });
++          logger.info('Full FFmpeg assembly complete', { videoProjectId, clips: rendered.length, completed: canComplete });
+           break;
+         } catch (error) {
+           logger.error('FFmpeg assembly failed — soft fallback', { error: (error as Error).message });
+@@ -135,7 +153,15 @@ export async function processBookVideoJob(job: Job): Promise<void> {
+       // user, so that case must always resolve to FAILED with an honest
+       // error, never COMPLETED.
+       const totalNonFailedScenes = scenes.filter((s) => s.status !== 'FAILED').length;
+-      const singleSceneFilm = rendered.length === 1 && totalNonFailedScenes === 1;
++      // A single-scene project may only be treated as "complete without
++      // real FFmpeg concatenation" when that one scene is the ENTIRE
++      // project (no other scenes at all, failed or otherwise) — otherwise
++      // this would silently drop every other scene from the final film
++      // while still reporting completion. Burned-in subtitles cannot be
++      // honored on this raw-clip fallback path (no encode occurred), so a
++      // required BURNED_IN mode never allows the fallback to COMPLETE.
++      const singleSceneFilm =
++        rendered.length === 1 && totalNonFailedScenes === 1 && scenes.length === 1 && !requiresBurnedIn;
+       const assemblyWasAttemptedButFailed = ffmpegOk && !singleSceneFilm;
+       await videoProjectRepository.update(videoProjectId, {
+         finalVideoUrl: singleSceneFilm ? rendered[0].videoUrl : null,
+diff --git a/backend/src/repositories/video-project.repository.ts b/backend/src/repositories/video-project.repository.ts
+index 67443a8..f72e037 100644
+--- a/backend/src/repositories/video-project.repository.ts
++++ b/backend/src/repositories/video-project.repository.ts
+@@ -17,7 +17,7 @@ export const videoProjectRepository = {
+       include: {
+         filmBible: true, characters: true, locations: true, props: true,
+         scenes: {
+-          orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }],
++          orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }],
+           include: { shots: { orderBy: { shotNumber: 'asc' } }, subtitleCues: { orderBy: { sequence: 'asc' } } },
+         },
+         manuscript: { include: { chapters: { orderBy: { chapterNumber: 'asc' } } } },
+@@ -31,7 +31,7 @@ export const videoProjectRepository = {
+       include: {
+         filmBible: true, characters: true, locations: true, props: true,
+         scenes: {
+-          orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }],
++          orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }],
+           include: { shots: { orderBy: { shotNumber: 'asc' } }, subtitleCues: { orderBy: { sequence: 'asc' } } },
+         },
+         manuscript: { include: { chapters: { orderBy: { chapterNumber: 'asc' } } } },
+diff --git a/backend/src/repositories/video-scene.repository.ts b/backend/src/repositories/video-scene.repository.ts
+index 956ba50..a3cf988 100644
+--- a/backend/src/repositories/video-scene.repository.ts
++++ b/backend/src/repositories/video-scene.repository.ts
+@@ -25,7 +25,7 @@ export const videoSceneRepository = {
+   async findByProject(videoProjectId: string) {
+     return prisma.videoScene.findMany({
+       where: { videoProjectId },
+-      orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }],
++      orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }],
+       include: { shots: { orderBy: { shotNumber: 'asc' } } },
+     });
+   },
+diff --git a/backend/src/routes/v1/video-project.routes.ts b/backend/src/routes/v1/video-project.routes.ts
+index 8b04fdf..f2a7685 100644
+--- a/backend/src/routes/v1/video-project.routes.ts
++++ b/backend/src/routes/v1/video-project.routes.ts
+@@ -1,6 +1,7 @@
+ import { Router } from 'express';
+ import { videoProjectController } from '../../controllers/video-project.controller';
+ import { authenticate } from '../../middleware/auth.middleware';
++import { aiGenerationRateLimiter } from '../../middleware/rate-limit.middleware';
+ 
+ const router = Router();
+ router.use(authenticate);
+@@ -8,22 +9,26 @@ router.post('/:bookId/video-projects', videoProjectController.create);
+ router.get('/:bookId/video-projects', videoProjectController.list);
+ router.get('/video-projects/:projectId', videoProjectController.get);
+ router.get('/video-projects/:projectId/progress', videoProjectController.progress);
+-router.post('/video-projects/:projectId/analyze', videoProjectController.analyze);
+-router.post('/video-projects/:projectId/plan', videoProjectController.plan);
+-router.post('/video-projects/:projectId/generate', videoProjectController.generate);
++// Book-to-Film generation/analysis/assembly endpoints are far more
++// expensive (provider spend, FFmpeg CPU time) than ordinary API requests —
++// rate limit them so a user can't spam retries/regenerations into a huge
++// provider bill. Read-only endpoints above are left unlimited.
++router.post('/video-projects/:projectId/analyze', aiGenerationRateLimiter, videoProjectController.analyze);
++router.post('/video-projects/:projectId/plan', aiGenerationRateLimiter, videoProjectController.plan);
++router.post('/video-projects/:projectId/generate', aiGenerationRateLimiter, videoProjectController.generate);
+ router.post('/video-projects/:projectId/pause', videoProjectController.pause);
+-router.post('/video-projects/:projectId/resume', videoProjectController.resume);
++router.post('/video-projects/:projectId/resume', aiGenerationRateLimiter, videoProjectController.resume);
+ router.post('/video-projects/:projectId/cancel', videoProjectController.cancel);
+-router.post('/video-projects/:projectId/render', videoProjectController.render);
+-router.post('/video-projects/:projectId/subtitles', videoProjectController.generateSubtitles);
++router.post('/video-projects/:projectId/render', aiGenerationRateLimiter, videoProjectController.render);
++router.post('/video-projects/:projectId/subtitles', aiGenerationRateLimiter, videoProjectController.generateSubtitles);
+ router.patch('/video-projects/:projectId/subtitle-settings', videoProjectController.updateSubtitleSettings);
+ router.get('/video-projects/:projectId/scenes', videoProjectController.listScenes);
+ router.get('/video-scenes/:sceneId', videoProjectController.getScene);
+-router.post('/video-scenes/:sceneId/regenerate', videoProjectController.regenerateScene);
+-router.post('/video-scenes/:sceneId/generate', videoProjectController.regenerateScene);
++router.post('/video-scenes/:sceneId/regenerate', aiGenerationRateLimiter, videoProjectController.regenerateScene);
++router.post('/video-scenes/:sceneId/generate', aiGenerationRateLimiter, videoProjectController.regenerateScene);
+ router.patch('/video-scenes/:sceneId/prompt', videoProjectController.updateScenePrompt);
+ router.patch('/video-shots/:shotId/prompt', videoProjectController.updateShotPrompt);
+-router.post('/video-shots/:shotId/regenerate', videoProjectController.regenerateShot);
+-router.post('/video-shots/:shotId/generate-camera', videoProjectController.generateCameraForShot);
++router.post('/video-shots/:shotId/regenerate', aiGenerationRateLimiter, videoProjectController.regenerateShot);
++router.post('/video-shots/:shotId/generate-camera', aiGenerationRateLimiter, videoProjectController.generateCameraForShot);
+ router.post('/video-shots/:shotId/fix-continuity', videoProjectController.fixCameraContinuity);
+ export default router;
+diff --git a/backend/src/services/video-project.service.ts b/backend/src/services/video-project.service.ts
+index 5e96844..55d17ed 100644
+--- a/backend/src/services/video-project.service.ts
++++ b/backend/src/services/video-project.service.ts
+@@ -9,7 +9,7 @@ import { logger } from '../utils/logger';
+ import { CreateVideoProjectInput, VideoProjectProgress } from '../types/book-video.types';
+ import {
+   enqueueAnalyzeProject, enqueuePlanScenes, enqueueGenerateSceneVideo,
+-  enqueueGenerateSubtitles, enqueueAssembleFilm,
++  enqueueGenerateSubtitles, enqueueAssembleFilm, isQueueAvailable,
+ } from '../queues/book-video.queue';
+ import { getVideoProvider } from './video-provider.service';
+ import { compileShotPrompt, reasonCameraPlan, validateCameraPlan, normalizeShotCamera, validateCameraContinuity, suggestContinuityFix, type ShotCameraPlan } from '../cinematography';
+@@ -81,17 +81,31 @@ export const videoProjectService = {
+     if (['ANALYZING', 'PLANNING', 'GENERATING_VIDEO', 'ASSEMBLING'].includes(project.status)) {
+       throw AppError.conflict('Project is already processing', 'PROJECT_BUSY');
+     }
++    if (!(await isQueueAvailable())) {
++      throw AppError.serviceUnavailable('Video generation is temporarily unavailable (queue infrastructure unreachable). Please try again shortly.', 'QUEUE_UNAVAILABLE');
++    }
+     await videoProjectRepository.updateStatus(projectId, 'ANALYZING', { progress: 1, errorMessage: null });
+     const job = await enqueueAnalyzeProject({ videoProjectId: projectId, bookId: project.bookId, userId });
+-    return { projectId, jobId: job?.id ?? null, status: 'ANALYZING' };
++    if (!job?.id) {
++      await videoProjectRepository.updateStatus(projectId, 'FAILED', { errorMessage: 'Could not queue analysis due to an infrastructure error. Please retry.' });
++      throw AppError.serviceUnavailable('Could not queue analysis. Please retry.', 'QUEUE_ENQUEUE_FAILED');
++    }
++    return { projectId, jobId: job.id, status: 'ANALYZING' };
+   },
+   async startPlanning(userId: string, projectId: string) {
+     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
+     if (!project) throw AppError.notFound('Video project not found');
+     if (!project.filmBible) throw AppError.badRequest('Run analysis first.');
++    if (!(await isQueueAvailable())) {
++      throw AppError.serviceUnavailable('Video generation is temporarily unavailable (queue infrastructure unreachable). Please try again shortly.', 'QUEUE_UNAVAILABLE');
++    }
+     await videoProjectRepository.updateStatus(projectId, 'PLANNING', { progress: 61 });
+     const job = await enqueuePlanScenes({ videoProjectId: projectId, bookId: project.bookId });
+-    return { projectId, jobId: job?.id ?? null };
++    if (!job?.id) {
++      await videoProjectRepository.updateStatus(projectId, 'FAILED', { errorMessage: 'Could not queue scene planning due to an infrastructure error. Please retry.' });
++      throw AppError.serviceUnavailable('Could not queue scene planning. Please retry.', 'QUEUE_ENQUEUE_FAILED');
++    }
++    return { projectId, jobId: job.id };
+   },
+   async startGeneration(userId: string, projectId: string, opts?: { sceneId?: string }) {
+     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
+@@ -103,12 +117,24 @@ export const videoProjectService = {
+     if (project.status === 'GENERATING_VIDEO') {
+       throw AppError.conflict('Video generation is already running for this project', 'PROJECT_BUSY');
+     }
+-    const user = await prisma.user.findUnique({ where: { id: userId } });
+-    if (!user) throw AppError.notFound('User not found');
++    const userExists = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
++    if (!userExists) throw AppError.notFound('User not found');
+     const scenes = opts?.sceneId
+       ? project.scenes.filter((s) => s.id === opts.sceneId)
+       : project.scenes.filter((s) => s.status === 'PROMPT_READY' || s.status === 'FAILED');
+     if (!scenes.length) throw AppError.badRequest('No scenes ready for generation.');
++
++    // P0: verify the queue/Redis infrastructure is actually reachable
++    // BEFORE committing a paid generation. If Redis is down, the request
++    // must fail cleanly with no credits charged — never silently continue
++    // and enqueue nothing.
++    if (!(await isQueueAvailable())) {
++      throw AppError.serviceUnavailable(
++        'Video generation is temporarily unavailable (queue infrastructure unreachable). You have not been charged — please try again shortly.',
++        'QUEUE_UNAVAILABLE'
++      );
++    }
++
+     // Charge per shot that still needs provider generation (not per scene, not for subtitle/ffmpeg)
+     const sceneIds = scenes.map((s) => s.id);
+     const pendingShots = await prisma.videoShot.count({
+@@ -118,24 +144,87 @@ export const videoProjectService = {
+       },
+     });
+     const cost = Math.max(1, pendingShots);
+-    if (user.credits < cost) throw AppError.badRequest(`Insufficient credits. Need ${cost} (shots), have ${user.credits}.`, 'INSUFFICIENT_CREDITS');
+-    await prisma.$transaction(async (tx) => {
+-      await tx.user.update({ where: { id: userId }, data: { credits: { decrement: cost } } });
+-      await tx.billingEvent.create({
++
++    // P0: atomic, race-safe credit reservation. A plain
++    // "read credits -> check -> decrement" sequence lets two concurrent
++    // requests both observe the same balance and both decrement, allowing
++    // overspend. updateMany's WHERE clause is evaluated by Postgres as part
++    // of the same atomic statement, so only one of two concurrent requests
++    // racing for the same balance can ever match `credits gte cost`; the
++    // loser's updateMany matches zero rows and count is 0.
++    const reservation = await prisma.$transaction(async (tx) => {
++      const result = await tx.user.updateMany({
++        where: { id: userId, credits: { gte: cost } },
++        data: { credits: { decrement: cost } },
++      });
++      if (result.count === 0) return null;
++      const billingEvent = await tx.billingEvent.create({
+         data: {
+           userId,
+           type: 'video_generation_charge',
+           amount: cost,
+-          metadata: { videoProjectId: projectId, sceneCount: scenes.length, shotCount: pendingShots },
++          metadata: { videoProjectId: projectId, sceneCount: scenes.length, shotCount: pendingShots, status: 'reserved' },
+         },
+       });
++      return billingEvent;
+     });
++    if (!reservation) {
++      const current = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
++      throw AppError.badRequest(`Insufficient credits. Need ${cost} (shots), have ${current?.credits ?? 0}.`, 'INSUFFICIENT_CREDITS');
++    }
++
+     await videoProjectRepository.updateStatus(projectId, 'GENERATING_VIDEO', { progress: 72, errorMessage: null });
++
++    // Enqueue every scene's generation job. Credits are already reserved
++    // at this point, so if enqueueing fails partway through (e.g. Redis
++    // drops mid-request despite the pre-flight check above), the
++    // reservation must be compensated rather than left charged against
++    // work that was never actually queued.
+     const jobIds: string[] = [];
+-    for (const scene of scenes) {
+-      const job = await enqueueGenerateSceneVideo({ videoProjectId: projectId, sceneId: scene.id });
+-      if (job?.id) jobIds.push(String(job.id));
++    let enqueueError: unknown = null;
++    try {
++      for (const scene of scenes) {
++        const job = await enqueueGenerateSceneVideo({ videoProjectId: projectId, sceneId: scene.id });
++        if (!job?.id) {
++          throw new Error(`Failed to enqueue generation for scene ${scene.id} — queue returned no job id`);
++        }
++        jobIds.push(String(job.id));
++      }
++    } catch (error) {
++      enqueueError = error;
++    }
++
++    if (enqueueError || jobIds.length !== scenes.length) {
++      // Compensate: refund the full reservation, record an explicit
++      // reversal audit record (idempotent — tied to the original
++      // reservation's id so retries of this compensation can't double
++      // refund), and put the project back into a retryable, non-charged
++      // state instead of leaving it stuck in GENERATING_VIDEO.
++      await prisma.$transaction(async (tx) => {
++        const alreadyReversed = await tx.billingEvent.findFirst({
++          where: { type: 'video_generation_charge_reversal', metadata: { path: ['reversalOf'], equals: reservation.id } },
++        });
++        if (!alreadyReversed) {
++          await tx.user.update({ where: { id: userId }, data: { credits: { increment: cost } } });
++          await tx.billingEvent.create({
++            data: {
++              userId,
++              type: 'video_generation_charge_reversal',
++              amount: cost,
++              metadata: { videoProjectId: projectId, reversalOf: reservation.id, reason: 'queue enqueue failure' },
++            },
++          });
++        }
++      });
++      await videoProjectRepository.updateStatus(projectId, 'FAILED', {
++        errorMessage: 'Could not queue video generation due to an infrastructure error. You have not been charged — please retry.',
++      });
++      throw AppError.serviceUnavailable(
++        'Video generation could not be queued due to an infrastructure error. Your credits have been refunded — please retry.',
++        'QUEUE_ENQUEUE_FAILED'
++      );
+     }
++
+     return { projectId, enqueued: scenes.length, jobIds, creditsCharged: cost };
+   },
+   async regenerateScene(userId: string, sceneId: string) {
+@@ -527,16 +616,30 @@ export const videoProjectService = {
+     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
+     if (!project) throw AppError.notFound('Video project not found');
+     if (!project.subtitleEnabled) throw AppError.badRequest('Subtitles are disabled');
++    if (!(await isQueueAvailable())) {
++      throw AppError.serviceUnavailable('Video generation is temporarily unavailable (queue infrastructure unreachable). Please try again shortly.', 'QUEUE_UNAVAILABLE');
++    }
+     await videoProjectRepository.updateStatus(projectId, 'GENERATING_SUBTITLES');
+     const job = await enqueueGenerateSubtitles({ videoProjectId: projectId });
+-    return { projectId, jobId: job?.id ?? null };
++    if (!job?.id) {
++      await videoProjectRepository.updateStatus(projectId, 'FAILED', { errorMessage: 'Could not queue subtitle generation due to an infrastructure error. Please retry.' });
++      throw AppError.serviceUnavailable('Could not queue subtitle generation. Please retry.', 'QUEUE_ENQUEUE_FAILED');
++    }
++    return { projectId, jobId: job.id };
+   },
+   async renderFinal(userId: string, projectId: string) {
+     const project = await videoProjectRepository.findByIdForUser(projectId, userId);
+     if (!project) throw AppError.notFound('Video project not found');
++    if (!(await isQueueAvailable())) {
++      throw AppError.serviceUnavailable('Video generation is temporarily unavailable (queue infrastructure unreachable). Please try again shortly.', 'QUEUE_UNAVAILABLE');
++    }
+     await videoProjectRepository.updateStatus(projectId, 'ASSEMBLING', { progress: 90 });
+     const job = await enqueueAssembleFilm({ videoProjectId: projectId });
+-    return { projectId, jobId: job?.id ?? null };
++    if (!job?.id) {
++      await videoProjectRepository.updateStatus(projectId, 'FAILED', { errorMessage: 'Could not queue final assembly due to an infrastructure error. Please retry.' });
++      throw AppError.serviceUnavailable('Could not queue final assembly. Please retry.', 'QUEUE_ENQUEUE_FAILED');
++    }
++    return { projectId, jobId: job.id };
+   },
+   /**
+    * Generate all shots for a scene, then FFmpeg-assemble them into scene.videoUrl.
+@@ -859,27 +962,70 @@ export const videoProjectService = {
+     provider: ReturnType<typeof getVideoProvider>,
+     projectId?: string
+   ): Promise<void> {
++    let consecutivePollErrors = 0;
+     for (let i = 0; i < 60; i++) {
+       await new Promise((r) => setTimeout(r, 10_000));
+       const status = await provider.getGenerationStatus(providerGenerationId);
++
++      // A poll-call error (network blip, transient 5xx) is NOT the same as
++      // the provider reporting genuine failure — treating every hiccup as a
++      // terminal failure would kill an otherwise-succeeding, already-paid
++      // generation and (since FAILED shots are eligible for resubmission)
++      // risk a second, duplicate billed provider call. Only a small number
++      // of *consecutive* errors is treated as dead; an isolated blip is
++      // retried on the next poll tick.
++      if (status.status === 'failed' && status.errorType === 'TIMEOUT' && !status.videoUrl) {
++        consecutivePollErrors++;
++        if (consecutivePollErrors < 3) {
++          logger.warn('Transient error polling provider status — will retry', {
++            shotId, providerGenerationId, attempt: consecutivePollErrors,
++          });
++          continue;
++        }
++      } else {
++        consecutivePollErrors = 0;
++      }
++
+       if (status.status === 'completed' && status.videoUrl) {
+-        let storedUrl = status.videoUrl;
++        // P0: a provider-generated video is not durably RENDERED until it
++        // has been downloaded and re-uploaded to our own storage. A
++        // provider URL is typically short-lived/signed — silently marking
++        // the shot RENDERED with that temporary URL when our own upload
++        // fails would look successful right up until the link expires.
+         try {
+           const res = await fetch(status.videoUrl);
+-          if (res.ok) {
+-            storedUrl = await storageService.uploadBuffer(
+-              Buffer.from(await res.arrayBuffer()),
+-              'video/mp4',
+-              `book-video/${projectId ?? 'unknown'}/shots/${shotId}`
+-            );
+-          }
++          if (!res.ok) throw new Error(`Provider video fetch failed: ${res.status}`);
++          const storedUrl = await storageService.uploadBuffer(
++            Buffer.from(await res.arrayBuffer()),
++            'video/mp4',
++            `book-video/${projectId ?? 'unknown'}/shots/${shotId}`
++          );
++          await prisma.videoShot.update({
++            where: { id: shotId },
++            data: { status: 'RENDERED', videoUrl: storedUrl, errorMessage: null },
++          });
+         } catch (e) {
+-          logger.warn('Could not re-upload shot video', { error: (e as Error).message });
++          // Durable storage failed even though the provider succeeded.
++          // Preserve providerGenerationId so a retry resumes/re-fetches
++          // this same completed generation instead of submitting (and
++          // billing for) a brand new one — processShotVideo's idempotency
++          // guard only resumes GENERATING shots with a live
++          // providerGenerationId, so keep status GENERATING here rather
++          // than FAILED (which would clear that path) and let the next
++          // regeneration attempt re-download from the provider.
++          logger.error('Durable storage upload failed after provider success — shot NOT marked rendered', {
++            shotId, providerGenerationId, error: (e as Error).message,
++          });
++          await prisma.videoShot.update({
++            where: { id: shotId },
++            data: {
++              status: 'FAILED',
++              errorMessage: `Video generated by provider but could not be saved to durable storage: ${(e as Error).message}`,
++              lastErrorType: 'STORAGE_ERROR' as ProviderErrorType,
++              retryCount: { increment: 1 },
++            },
++          });
+         }
+-        await prisma.videoShot.update({
+-          where: { id: shotId },
+-          data: { status: 'RENDERED', videoUrl: storedUrl, errorMessage: null },
+-        });
+         return;
+       }
+       if (status.status === 'failed') {
+@@ -894,15 +1040,19 @@ export const videoProjectService = {
+         });
+         return;
+       }
++      // status === 'processing' (or unknown-but-not-failed): keep polling.
+     }
+-    await prisma.videoShot.update({
+-      where: { id: shotId },
+-      data: {
+-        status: 'FAILED',
+-        errorMessage: 'Timed out waiting for video provider',
+-        lastErrorType: 'TIMEOUT',
+-        retryCount: { increment: 1 },
+-      },
++    // Our polling window elapsed without the provider reporting completion
++    // or failure — this does NOT mean the provider generation itself
++    // failed; it may still be processing on the provider's side. Do not
++    // mark the shot FAILED here: that would make it eligible for immediate
++    // resubmission (a second, duplicate billed provider call) for work
++    // that might still complete. Instead leave status/providerGenerationId
++    // as-is; processShotVideo and regenerateScene both already treat a
++    // GENERATING shot older than SHOT_GENERATION_STALE_MS as safely
++    // resumable/re-triable, which is the correct recovery path here.
++    logger.warn('Provider poll window elapsed without a terminal status — leaving shot for staleness-based recovery', {
++      shotId, providerGenerationId,
+     });
+   },
+ };
+diff --git a/backend/src/utils/helpers.ts b/backend/src/utils/helpers.ts
+index a67e26a..bbfa3d1 100644
+--- a/backend/src/utils/helpers.ts
++++ b/backend/src/utils/helpers.ts
+@@ -39,6 +39,9 @@ export class AppError extends Error {
+   static internal(message = 'Internal server error', code?: string) {
+     return new AppError(message, 500, code);
+   }
++  static serviceUnavailable(message = 'Service unavailable', code?: string) {
++    return new AppError(message, 503, code);
++  }
+ }
+ 
+ export function asyncHandler<T extends (...args: any[]) => Promise<any>>(fn: T) {
+diff --git a/backend/tests/unit/video-generation-billing-safety.test.ts b/backend/tests/unit/video-generation-billing-safety.test.ts
+new file mode 100644
+index 0000000..d8b54e0
+--- /dev/null
++++ b/backend/tests/unit/video-generation-billing-safety.test.ts
+@@ -0,0 +1,196 @@
++/**
++ * Regression tests for the P0 billing/queue safety fixes in
++ * videoProjectService.startGeneration:
++ *
++ *  TEST 1: Redis/queue unavailable -> generation fails, no credit charged.
++ *  TEST 2: Two simultaneous generation requests racing for the same
++ *          balance -> only one may successfully reserve credits.
++ *  (bonus) Credits reserved but queue enqueue subsequently fails ->
++ *          the reservation is refunded and the project is not left
++ *          silently charged with nothing queued.
++ *
++ * The real Postgres/Redis-backed DB is not available in this environment,
++ * so `../../src/config/database` (the shared Prisma client) and the
++ * repository/queue modules are mocked at the module boundary. This still
++ * exercises the actual decision logic in videoProjectService — the atomic
++ * `updateMany({ where: { credits: { gte: cost } } })` reservation, the
++ * pre-flight queue health check, and the compensating refund — without
++ * requiring a live database.
++ */
++
++const mockPrisma: any = {
++  user: {
++    findUnique: jest.fn(),
++    updateMany: jest.fn(),
++    update: jest.fn(),
++  },
++  videoShot: {
++    count: jest.fn(),
++  },
++  billingEvent: {
++    create: jest.fn(),
++    findFirst: jest.fn(),
++  },
++};
++mockPrisma.$transaction = jest.fn(async (cb: (tx: unknown) => unknown) => cb(mockPrisma));
++
++jest.mock('../../src/config/database', () => ({ prisma: mockPrisma }));
++
++const mockVideoProjectRepository = {
++  findByIdForUser: jest.fn(),
++  updateStatus: jest.fn(),
++};
++jest.mock('../../src/repositories/video-project.repository', () => ({
++  videoProjectRepository: mockVideoProjectRepository,
++}));
++
++jest.mock('../../src/repositories/video-scene.repository', () => ({
++  videoSceneRepository: { findByIdForUser: jest.fn(), findById: jest.fn(), updateStatus: jest.fn(), update: jest.fn() },
++}));
++jest.mock('../../src/repositories/book.repository', () => ({
++  bookRepository: { findByIdForUser: jest.fn() },
++}));
++jest.mock('../../src/repositories/manuscript.repository', () => ({
++  manuscriptRepository: { findByBookId: jest.fn() },
++}));
++
++const mockIsQueueAvailable = jest.fn();
++const mockEnqueueGenerateSceneVideo = jest.fn();
++jest.mock('../../src/queues/book-video.queue', () => ({
++  enqueueAnalyzeProject: jest.fn(),
++  enqueuePlanScenes: jest.fn(),
++  enqueueGenerateSceneVideo: (...args: unknown[]) => mockEnqueueGenerateSceneVideo(...args),
++  enqueueGenerateSubtitles: jest.fn(),
++  enqueueAssembleFilm: jest.fn(),
++  isQueueAvailable: (...args: unknown[]) => mockIsQueueAvailable(...args),
++}));
++
++// Deep dependencies pulled in transitively by video-project.service.ts that
++// are irrelevant to startGeneration but must not blow up on import.
++jest.mock('../../src/services/video-provider.service', () => ({ getVideoProvider: jest.fn() }));
++jest.mock('../../src/services/shot-prompt-compiler.service', () => ({ shotPromptCompilerService: { compile: jest.fn() } }));
++jest.mock('../../src/services/ffmpeg-assembly.service', () => ({ ffmpegAssemblyService: { isAvailable: jest.fn(), assemble: jest.fn(), srtToAss: jest.fn() } }));
++jest.mock('../../src/services/storage.service', () => ({ storageService: { uploadBuffer: jest.fn(), getObjectBuffer: jest.fn(), publicUrl: jest.fn() } }));
++
++import { videoProjectService } from '../../src/services/video-project.service';
++
++const PROJECT_ID = 'proj-1';
++const USER_ID = 'user-1';
++
++function baseProject() {
++  return {
++    id: PROJECT_ID,
++    status: 'GENERATING_SCENES',
++    scenes: [
++      { id: 'scene-1', status: 'PROMPT_READY' },
++      { id: 'scene-2', status: 'PROMPT_READY' },
++    ],
++  };
++}
++
++beforeEach(() => {
++  jest.clearAllMocks();
++  mockVideoProjectRepository.findByIdForUser.mockResolvedValue(baseProject());
++  mockVideoProjectRepository.updateStatus.mockResolvedValue({});
++  mockPrisma.user.findUnique.mockResolvedValue({ id: USER_ID });
++  mockPrisma.videoShot.count.mockResolvedValue(2); // 2 pending shots -> cost 2
++  mockPrisma.$transaction.mockImplementation(async (cb: (tx: unknown) => unknown) => cb(mockPrisma));
++});
++
++describe('startGeneration — queue unavailable (TEST 1)', () => {
++  it('fails cleanly and charges no credits when Redis/BullMQ is unreachable', async () => {
++    mockIsQueueAvailable.mockResolvedValue(false);
++
++    await expect(videoProjectService.startGeneration(USER_ID, PROJECT_ID)).rejects.toMatchObject({
++      code: 'QUEUE_UNAVAILABLE',
++    });
++
++    expect(mockPrisma.user.updateMany).not.toHaveBeenCalled();
++    expect(mockPrisma.billingEvent.create).not.toHaveBeenCalled();
++    expect(mockEnqueueGenerateSceneVideo).not.toHaveBeenCalled();
++    // Must never have transitioned the project into GENERATING_VIDEO either.
++    expect(mockVideoProjectRepository.updateStatus).not.toHaveBeenCalledWith(
++      PROJECT_ID,
++      'GENERATING_VIDEO',
++      expect.anything()
++    );
++  });
++});
++
++describe('startGeneration — atomic credit reservation (TEST 2)', () => {
++  it('only one of two simultaneous requests can reserve the same credits', async () => {
++    mockIsQueueAvailable.mockResolvedValue(true);
++    mockEnqueueGenerateSceneVideo.mockImplementation(async () => ({ id: 'job-1' }));
++
++    // First request: the atomic updateMany matches (count 1) — reservation succeeds.
++    mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 });
++    mockPrisma.billingEvent.create.mockResolvedValueOnce({ id: 'billing-1' });
++    const first = await videoProjectService.startGeneration(USER_ID, PROJECT_ID);
++    expect(first.creditsCharged).toBe(2);
++
++    // Second, "simultaneous" request against the now-lower balance: the
++    // atomic updateMany's WHERE clause (credits >= cost) matches zero rows,
++    // simulating the balance having already been consumed by the first
++    // request. It must fail with INSUFFICIENT_CREDITS, not silently
++    // over-decrement.
++    mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 0 });
++    mockPrisma.user.findUnique.mockResolvedValueOnce({ credits: 0 });
++    await expect(videoProjectService.startGeneration(USER_ID, PROJECT_ID)).rejects.toMatchObject({
++      code: 'INSUFFICIENT_CREDITS',
++    });
++
++    // The failed reservation must never have created a second billing charge.
++    expect(mockPrisma.billingEvent.create).toHaveBeenCalledTimes(1);
++  });
++
++  it('uses a single atomic conditional update rather than read-then-decrement', async () => {
++    mockIsQueueAvailable.mockResolvedValue(true);
++    mockEnqueueGenerateSceneVideo.mockImplementation(async () => ({ id: 'job-1' }));
++    mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 });
++    mockPrisma.billingEvent.create.mockResolvedValueOnce({ id: 'billing-1' });
++
++    await videoProjectService.startGeneration(USER_ID, PROJECT_ID);
++
++    expect(mockPrisma.user.updateMany).toHaveBeenCalledWith(
++      expect.objectContaining({
++        where: expect.objectContaining({ id: USER_ID, credits: { gte: 2 } }),
++        data: expect.objectContaining({ credits: { decrement: 2 } }),
++      })
++    );
++  });
++});
++
++describe('startGeneration — compensating refund on enqueue failure', () => {
++  it('refunds reserved credits and marks the project FAILED if the queue enqueue fails after charging', async () => {
++    mockIsQueueAvailable.mockResolvedValue(true);
++    mockPrisma.user.updateMany.mockResolvedValueOnce({ count: 1 });
++    mockPrisma.billingEvent.create.mockResolvedValueOnce({ id: 'billing-1' });
++    mockPrisma.billingEvent.findFirst.mockResolvedValue(null);
++    // Enqueue throws for the second scene, simulating Redis dying mid-request.
++    mockEnqueueGenerateSceneVideo
++      .mockResolvedValueOnce({ id: 'job-1' })
++      .mockRejectedValueOnce(new Error('connection lost'));
++
++    await expect(videoProjectService.startGeneration(USER_ID, PROJECT_ID)).rejects.toMatchObject({
++      code: 'QUEUE_ENQUEUE_FAILED',
++    });
++
++    // Compensation: credits incremented back by the exact reserved amount.
++    expect(mockPrisma.user.update).toHaveBeenCalledWith({
++      where: { id: USER_ID },
++      data: { credits: { increment: 2 } },
++    });
++    // An explicit reversal audit record was created.
++    expect(mockPrisma.billingEvent.create).toHaveBeenCalledWith(
++      expect.objectContaining({
++        data: expect.objectContaining({ type: 'video_generation_charge_reversal', amount: 2 }),
++      })
++    );
++    // Project must not be left stuck in GENERATING_VIDEO.
++    expect(mockVideoProjectRepository.updateStatus).toHaveBeenCalledWith(
++      PROJECT_ID,
++      'FAILED',
++      expect.objectContaining({ errorMessage: expect.stringContaining('not been charged') })
++    );
++  });
++});

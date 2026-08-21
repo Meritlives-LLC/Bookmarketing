@@ -25,7 +25,7 @@ export const videoSceneRepository = {
   async findByProject(videoProjectId: string) {
     return prisma.videoScene.findMany({
       where: { videoProjectId },
-      orderBy: [{ chapterId: 'asc' }, { sceneNumber: 'asc' }],
+      orderBy: [{ chapter: { chapterNumber: 'asc' } }, { sceneNumber: 'asc' }],
       include: { shots: { orderBy: { shotNumber: 'asc' } } },
     });
   },
