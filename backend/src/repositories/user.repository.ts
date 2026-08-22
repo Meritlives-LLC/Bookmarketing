@@ -1,78 +1,178 @@
-import { Prisma, User } from '@prisma/client';
-import { prisma } from '../config/database';
+import {
+  Prisma,
+  User,
+} from '@prisma/client';
+
+import {
+  prisma,
+} from '../config/database';
 
 export const userRepository = {
-  findById(id: string): Promise<User | null> {
-    return prisma.user.findUnique({ where: { id } });
-  },
-
-  findByIdWithSubscription(id: string) {
-    return prisma.user.findUnique({ where: { id }, include: { subscription: true } });
-  },
-
-  updatePreferences(id: string, preferences: Record<string, boolean>) {
-    return prisma.user.update({
+  findById(
+    id: string,
+  ): Promise<User | null> {
+    return prisma.user.findUnique({
       where: { id },
-      data: { emailPreferences: preferences },
     });
   },
 
-  findByEmail(email: string): Promise<User | null> {
-    return prisma.user.findUnique({ where: { email } });
-  },
-
-  findByEmailVerifyToken(token: string): Promise<User | null> {
-    return prisma.user.findFirst({ where: { emailVerifyToken: token } });
-  },
-
-  create(data: Prisma.UserCreateInput): Promise<User> {
-    return prisma.user.create({ data });
-  },
-
-  update(id: string, data: Prisma.UserUpdateInput): Promise<User> {
-    return prisma.user.update({ where: { id }, data });
-  },
-
-  updateLastLogin(id: string): Promise<User> {
-    return prisma.user.update({ where: { id }, data: { lastLoginAt: new Date() } });
-  },
-
-  /** Invalidates every outstanding refresh token for this user (logout, password reset). */
-  bumpTokenVersion(id: string): Promise<User> {
-    return prisma.user.update({ where: { id }, data: { tokenVersion: { increment: 1 } } });
-  },
-
-  setResetToken(id: string, token: string, expires: Date): Promise<User> {
-    return prisma.user.update({
+  findByIdWithSubscription(
+    id: string,
+  ) {
+    return prisma.user.findUnique({
       where: { id },
-      data: { resetToken: token, resetTokenExpires: expires },
+      include: {
+        subscription: true,
+      },
     });
   },
 
-  findByResetToken(token: string): Promise<User | null> {
+  updatePreferences(
+    id: string,
+    preferences: Record<
+      string,
+      boolean
+    >,
+  ) {
+    return prisma.user.update({
+      where: { id },
+      data: {
+        emailPreferences:
+          preferences,
+      },
+    });
+  },
+
+  findByEmail(
+    email: string,
+  ): Promise<User | null> {
+    return prisma.user.findUnique({
+      where: { email },
+    });
+  },
+
+  /*
+   * emailVerifyToken now contains the SHA-256
+   * hash, never the raw verification token.
+   */
+  findByEmailVerifyToken(
+    tokenHash: string,
+  ): Promise<User | null> {
     return prisma.user.findFirst({
-      where: { resetToken: token, resetTokenExpires: { gt: new Date() } },
+      where: {
+        emailVerifyToken:
+          tokenHash,
+      },
     });
   },
 
-  clearResetToken(id: string): Promise<User> {
-    return prisma.user.update({
-      where: { id },
-      data: { resetToken: null, resetTokenExpires: null },
+  create(
+    data: Prisma.UserCreateInput,
+  ): Promise<User> {
+    return prisma.user.create({
+      data,
     });
   },
 
-  decrementCredits(id: string, amount = 1): Promise<User> {
+  update(
+    id: string,
+    data: Prisma.UserUpdateInput,
+  ): Promise<User> {
     return prisma.user.update({
       where: { id },
-      data: { credits: { decrement: amount } },
+      data,
     });
   },
 
-  incrementCredits(id: string, amount: number): Promise<User> {
+  updateLastLogin(
+    id: string,
+  ): Promise<User> {
     return prisma.user.update({
       where: { id },
-      data: { credits: { increment: amount } },
+      data: {
+        lastLoginAt: new Date(),
+      },
+    });
+  },
+
+  bumpTokenVersion(
+    id: string,
+  ): Promise<User> {
+    return prisma.user.update({
+      where: { id },
+      data: {
+        tokenVersion: {
+          increment: 1,
+        },
+      },
+    });
+  },
+
+  setResetToken(
+    id: string,
+    tokenHash: string,
+    expires: Date,
+  ): Promise<User> {
+    return prisma.user.update({
+      where: { id },
+      data: {
+        resetToken: tokenHash,
+        resetTokenExpires:
+          expires,
+      },
+    });
+  },
+
+  findByResetToken(
+    tokenHash: string,
+  ): Promise<User | null> {
+    return prisma.user.findFirst({
+      where: {
+        resetToken: tokenHash,
+        resetTokenExpires: {
+          gt: new Date(),
+        },
+      },
+    });
+  },
+
+  clearResetToken(
+    id: string,
+  ): Promise<User> {
+    return prisma.user.update({
+      where: { id },
+      data: {
+        resetToken: null,
+        resetTokenExpires: null,
+      },
+    });
+  },
+
+  decrementCredits(
+    id: string,
+    amount = 1,
+  ): Promise<User> {
+    return prisma.user.update({
+      where: { id },
+      data: {
+        credits: {
+          decrement: amount,
+        },
+      },
+    });
+  },
+
+  incrementCredits(
+    id: string,
+    amount: number,
+  ): Promise<User> {
+    return prisma.user.update({
+      where: { id },
+      data: {
+        credits: {
+          increment: amount,
+        },
+      },
     });
   },
 };
