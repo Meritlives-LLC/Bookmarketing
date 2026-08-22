@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { api } from "@/lib/api/client";
 
 export function PricingCta({
   planId,
@@ -13,20 +14,42 @@ export function PricingCta({
   cta: string;
   popular: boolean;
 }) {
-  // Client-only: signed-in authors land on billing to actually pick a plan,
-  // signed-out visitors go through registration first.
   const [href, setHref] = useState("/register");
 
   useEffect(() => {
-    const hasToken = typeof window !== "undefined" && !!localStorage.getItem("accessToken");
-    if (hasToken) {
-      setHref(planId === "FREE" ? "/dashboard" : "/settings/billing");
+    let mounted = true;
+
+    async function checkSession() {
+      try {
+        await api.get("/user");
+
+        if (mounted) {
+          setHref(
+            planId === "FREE"
+              ? "/dashboard"
+              : "/settings/billing"
+          );
+        }
+      } catch {
+        if (mounted) {
+          setHref("/register");
+        }
+      }
     }
+
+    checkSession();
+
+    return () => {
+      mounted = false;
+    };
   }, [planId]);
 
   return (
     <Link href={href} className="block">
-      <Button className="w-full" variant={popular ? "default" : "outline"}>
+      <Button
+        className="w-full"
+        variant={popular ? "default" : "outline"}
+      >
         {cta}
       </Button>
     </Link>

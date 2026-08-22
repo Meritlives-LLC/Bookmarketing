@@ -64,24 +64,67 @@ export default function BookVideoStudioPage({ params }: { params: { id: string }
 
   async function handleUpload() {
     if (!uploadFile) return;
-    setBusy(true); setError("");
+
+    setBusy(true);
+    setError("");
+
     try {
-      const form = new FormData(); form.append("manuscript", uploadFile);
-      const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
-      const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api/v1";
-      const res = await fetch(`${base}/books/${bookId}/manuscript`, { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {}, credentials: "include", body: form });
+      const form = new FormData();
+      form.append("manuscript", uploadFile);
+
+      const base =
+        process.env.NEXT_PUBLIC_API_URL ||
+        "http://localhost:4000/api/v1";
+
+      const res = await fetch(
+        `${base}/books/${bookId}/manuscript`,
+        {
+          method: "POST",
+          credentials: "include",
+          body: form,
+        }
+      );
+
       const json = await res.json();
-      if (!res.ok) throw new Error(json?.message || "Upload failed");
+
+      if (!res.ok) {
+        throw new Error(
+          json?.error?.message ||
+            json?.message ||
+            "Upload failed"
+        );
+      }
+
       setManuscript(json.data);
+
       const poll = setInterval(async () => {
         try {
-          const m = await api.get<Manuscript>(`/books/${bookId}/manuscript`);
-          setManuscript(m);
-          if (m.extractionStatus === "COMPLETED" || m.extractionStatus === "FAILED") clearInterval(poll);
-        } catch { clearInterval(poll); }
+          const manuscript =
+            await api.get<Manuscript>(
+              `/books/${bookId}/manuscript`
+            );
+
+          setManuscript(manuscript);
+
+          if (
+            manuscript.extractionStatus === "COMPLETED" ||
+            manuscript.extractionStatus === "FAILED"
+          ) {
+            clearInterval(poll);
+          }
+        } catch {
+          clearInterval(poll);
+        }
       }, 3000);
-    } catch (e) { setError(e instanceof Error ? e.message : "Upload failed"); }
-    finally { setBusy(false); }
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Upload failed"
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function createProject() {

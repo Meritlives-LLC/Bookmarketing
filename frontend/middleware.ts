@@ -11,8 +11,7 @@ import type { NextRequest } from "next/server";
 // a protected route — including right after a successful login — and
 // bounced the user straight back to /login before the page ever rendered.
 //
-// The client keeps the real session in localStorage (accessToken /
-// refreshToken), which middleware (server-side) cannot read at all. The
+// Authentication is maintained by the server-side HttpOnly session cookie., which middleware (server-side) cannot read at all. The
 // actual gating happens client-side in AuthGuard.tsx, which checks that
 // localStorage token against GET /user via lib/api/client.ts. Middleware
 // just passes requests through; do not reintroduce a cookie-based redirect

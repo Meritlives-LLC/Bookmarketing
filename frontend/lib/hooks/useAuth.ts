@@ -9,31 +9,48 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
-    if (!token) {
-      setLoading(false);
-      return;
+    let mounted = true;
+
+    async function loadUser() {
+      try {
+        const currentUser = await api.get<User>("/user");
+
+        if (mounted) {
+          setUser(currentUser);
+        }
+      } catch {
+        if (mounted) {
+          setUser(null);
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
     }
-    api
-      .get<User>("/user")
-      .then(setUser)
-      .catch(() => {
-        localStorage.removeItem("accessToken");
-        localStorage.removeItem("refreshToken");
-      })
-      .finally(() => setLoading(false));
+
+    loadUser();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  function logout() {
-    api.post("/auth/logout").catch(() => {
-      // Best-effort: cookies may already be expired. Client-side state is
-      // cleared regardless so the user is never stuck "logged in" locally.
-    });
-    localStorage.removeItem("accessToken");
-    localStorage.removeItem("refreshToken");
-    setUser(null);
-    window.location.href = "/login";
+  async function logout() {
+    try {
+      await api.post("/auth/logout");
+    } catch {
+      // Logout is best-effort. The server clears the cookies.
+    } finally {
+      setUser(null);
+      window.location.href = "/login";
+    }
   }
 
-  return { user, loading, logout, isAuthenticated: !!user };
+  return {
+    user,
+    loading,
+    logout,
+    isAuthenticated: !!user,
+  };
 }
