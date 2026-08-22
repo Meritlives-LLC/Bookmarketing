@@ -3,6 +3,7 @@ import net from 'net';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import https from 'https';
 import { createWriteStream, promises as fs } from 'fs';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
@@ -23,31 +24,39 @@ export interface SecureFetchOptions {
   allowedContentTypePrefixes?: string[];
 }
 
+interface ResolvedHost {
+  hostname: string;
+  address: string;
+  family: 4 | 6;
+}
+
 function isDisallowedIPv4(ip: string): boolean {
   const parts = ip.split('.').map(Number);
 
   if (
     parts.length !== 4 ||
-    parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)
+    parts.some(
+      (p) => !Number.isInteger(p) || p < 0 || p > 255
+    )
   ) {
     return true;
   }
 
   const [a, b, c] = parts;
 
-  if (a === 0) return true; // 0.0.0.0/8
-  if (a === 10) return true; // RFC1918
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
-  if (a === 127) return true; // loopback
-  if (a === 169 && b === 254) return true; // link-local / metadata
-  if (a === 172 && b >= 16 && b <= 31) return true; // RFC1918
-  if (a === 192 && b === 0 && c === 0) return true; // IETF protocol assignments
-  if (a === 192 && b === 0 && c === 2) return true; // TEST-NET-1
-  if (a === 192 && b === 168) return true; // RFC1918
-  if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
-  if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
-  if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
-  if (a >= 224) return true; // multicast/reserved
+  if (a === 0) return true;
+  if (a === 10) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 0 && c === 0) return true;
+  if (a === 192 && b === 0 && c === 2) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a === 198 && b === 51 && c === 100) return true;
+  if (a === 203 && b === 0 && c === 113) return true;
+  if (a >= 224) return true;
 
   return false;
 }
@@ -55,29 +64,42 @@ function isDisallowedIPv4(ip: string): boolean {
 function isDisallowedIPv6(ip: string): boolean {
   const lower = ip.toLowerCase();
 
-  if (lower === '::') return true;
-  if (lower === '::1') return true;
+  if (lower === '::' || lower === '::1') {
+    return true;
+  }
 
   // IPv4-mapped IPv6.
-  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  const mapped = lower.match(
+    /^::ffff:(\d+\.\d+\.\d+\.\d+)$/
+  );
+
   if (mapped) {
     return isDisallowedIPv4(mapped[1]);
   }
 
   // IPv4-compatible IPv6.
-  const compatible = lower.match(/^::(\d+\.\d+\.\d+\.\d+)$/);
+  const compatible = lower.match(
+    /^::(\d+\.\d+\.\d+\.\d+)$/
+  );
+
   if (compatible) {
     return isDisallowedIPv4(compatible[1]);
   }
 
-  // fc00::/7 — unique local.
-  if (/^f[cd]/.test(lower)) return true;
+  // Unique-local fc00::/7.
+  if (/^f[cd]/.test(lower)) {
+    return true;
+  }
 
-  // fe80::/10 — link local.
-  if (/^fe[89ab]/.test(lower)) return true;
+  // Link-local fe80::/10.
+  if (/^fe[89ab]/.test(lower)) {
+    return true;
+  }
 
-  // ff00::/8 — multicast.
-  if (lower.startsWith('ff')) return true;
+  // Multicast ff00::/8.
+  if (lower.startsWith('ff')) {
+    return true;
+  }
 
   return false;
 }
@@ -85,9 +107,15 @@ function isDisallowedIPv6(ip: string): boolean {
 function isDisallowedIP(ip: string): boolean {
   const family = net.isIP(ip);
 
-  if (family === 4) return isDisallowedIPv4(ip);
-  if (family === 6) return isDisallowedIPv6(ip);
+  if (family === 4) {
+    return isDisallowedIPv4(ip);
+  }
 
+  if (family === 6) {
+    return isDisallowedIPv6(ip);
+  }
+
+  // Fail closed.
   return true;
 }
 
@@ -95,28 +123,28 @@ function normalizeHost(hostname: string): string {
   return hostname.replace(/\.$/, '').toLowerCase();
 }
 
-function hostAllowed(hostname: string, allowedHosts?: string[]): boolean {
-  if (!allowedHosts?.length) return true;
-
-  const host = normalizeHost(hostname);
-
-  return allowedHosts.some((allowed) => {
-    const candidate = normalizeHost(allowed);
-
-    // Exact host match only.
-    // Do NOT treat evil-goodreads.com as goodreads.com.
-    return host === candidate;
-  });
-}
-
-async function resolveAndValidateHost(hostname: string): Promise<void> {
-  const host = normalizeHost(hostname);
-
-  if (!host) {
-    throw AppError.badRequest('Remote host missing', 'SSRF_BLOCKED');
+function hostAllowed(
+  hostname: string,
+  allowedHosts?: string[],
+): boolean {
+  if (!allowedHosts?.length) {
+    return true;
   }
 
+  const host = normalizeHost(hostname);
+
+  return allowedHosts.some(
+    (allowed) => host === normalizeHost(allowed),
+  );
+}
+
+async function resolveAndValidateHost(
+  hostname: string,
+): Promise<ResolvedHost[]> {
+  const host = normalizeHost(hostname);
+
   if (
+    !host ||
     host === 'localhost' ||
     host.endsWith('.localhost') ||
     host.endsWith('.local')
@@ -127,6 +155,7 @@ async function resolveAndValidateHost(hostname: string): Promise<void> {
     );
   }
 
+  // Direct IP URL.
   if (net.isIP(host)) {
     if (isDisallowedIP(host)) {
       throw AppError.badRequest(
@@ -135,10 +164,16 @@ async function resolveAndValidateHost(hostname: string): Promise<void> {
       );
     }
 
-    return;
+    return [
+      {
+        hostname: host,
+        address: host,
+        family: net.isIP(host) as 4 | 6,
+      },
+    ];
   }
 
-  let records: string[] = [];
+  let addresses: ResolvedHost[] = [];
 
   try {
     const [v4, v6] = await Promise.all([
@@ -146,11 +181,25 @@ async function resolveAndValidateHost(hostname: string): Promise<void> {
       dns.resolve6(host).catch(() => [] as string[]),
     ]);
 
-    records = [...v4, ...v6];
+    addresses = [
+      ...v4.map((address) => ({
+        hostname: host,
+        address,
+        family: 4 as const,
+      })),
+      ...v6.map((address) => ({
+        hostname: host,
+        address,
+        family: 6 as const,
+      })),
+    ];
   } catch (error) {
     logger.warn('SSRF DNS resolution failed', {
       hostname: host,
-      error: error instanceof Error ? error.message : String(error),
+      error:
+        error instanceof Error
+          ? error.message
+          : String(error),
     });
 
     throw AppError.badRequest(
@@ -159,28 +208,30 @@ async function resolveAndValidateHost(hostname: string): Promise<void> {
     );
   }
 
-  if (!records.length) {
+  if (!addresses.length) {
     throw AppError.badRequest(
       'Remote host did not resolve',
       'SSRF_DNS_FAILED',
     );
   }
 
-  // Fail closed if ANY address is private/reserved.
-  for (const ip of records) {
-    if (isDisallowedIP(ip)) {
+  // Every DNS result must be safe.
+  for (const resolved of addresses) {
+    if (isDisallowedIP(resolved.address)) {
       throw AppError.badRequest(
-        `Remote host resolves to a disallowed address`,
+        'Remote host resolves to a disallowed address',
         'SSRF_BLOCKED',
       );
     }
   }
+
+  return addresses;
 }
 
 async function validateUrl(
   url: URL,
   allowedHosts?: string[],
-): Promise<void> {
+): Promise<ResolvedHost[]> {
   if (url.protocol !== 'https:') {
     throw AppError.badRequest(
       'Only HTTPS URLs are allowed',
@@ -188,7 +239,7 @@ async function validateUrl(
     );
   }
 
-  // Prevent credential smuggling / confusing URLs.
+  // Prevent userinfo-based URL confusion.
   if (url.username || url.password) {
     throw AppError.badRequest(
       'URLs containing credentials are not allowed',
@@ -196,7 +247,6 @@ async function validateUrl(
     );
   }
 
-  // Fragments are meaningless for server-side HTTP fetching.
   if (url.hash) {
     throw AppError.badRequest(
       'URL fragments are not allowed',
@@ -213,7 +263,7 @@ async function validateUrl(
     );
   }
 
-  await resolveAndValidateHost(hostname);
+  return resolveAndValidateHost(hostname);
 }
 
 export async function assertRemoteUrlAllowed(
@@ -225,7 +275,10 @@ export async function assertRemoteUrlAllowed(
   try {
     url = new URL(rawUrl);
   } catch {
-    throw AppError.badRequest('Invalid URL', 'SSRF_BLOCKED');
+    throw AppError.badRequest(
+      'Invalid URL',
+      'SSRF_BLOCKED',
+    );
   }
 
   await validateUrl(url, opts.allowedHosts);
@@ -233,37 +286,125 @@ export async function assertRemoteUrlAllowed(
   return url;
 }
 
-async function fetchWithTimeout(
-  url: URL,
-  timeoutMs: number,
-): Promise<Response> {
-  const controller = new AbortController();
+interface PinnedResponse {
+  statusCode: number;
+  headers: Record<
+    string,
+    string | string[] | undefined
+  >;
+  body: Readable;
+}
 
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
+function getHeader(
+  headers: PinnedResponse['headers'],
+  name: string,
+): string | undefined {
+  const value = headers[name.toLowerCase()];
 
-  try {
-    return await fetch(url.toString(), {
-      method: 'GET',
-      redirect: 'manual',
-      signal: controller.signal,
-      headers: {
-        Accept: '*/*',
-      },
-    });
-  } catch (error) {
-    if (controller.signal.aborted) {
-      throw AppError.badRequest(
-        'Remote request timed out',
-        'SSRF_TIMEOUT',
-      );
-    }
-
-    throw error;
-  } finally {
-    clearTimeout(timer);
+  if (Array.isArray(value)) {
+    return value[0];
   }
+
+  return value;
+}
+
+/**
+ * Makes the actual TLS connection to the IP address that was
+ * already resolved and validated.
+ *
+ * This is important for SSRF protection:
+ *
+ *     resolve -> validate IP -> connect to SAME IP
+ *
+ * rather than:
+ *
+ *     resolve -> validate IP -> fetch hostname -> DNS lookup again
+ *
+ * The latter can be vulnerable to DNS rebinding.
+ */
+function requestPinned(
+  url: URL,
+  resolved: ResolvedHost,
+  timeoutMs: number,
+): Promise<PinnedResponse> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const fail = (error: unknown) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      reject(error);
+    };
+
+    const req = https.request(
+      {
+        protocol: 'https:',
+
+        // IMPORTANT:
+        // Connect directly to the validated IP.
+        hostname: resolved.address,
+
+        port: url.port
+          ? Number(url.port)
+          : 443,
+
+        path: `${url.pathname}${url.search}`,
+
+        method: 'GET',
+
+        // Preserve hostname for TLS/SNI.
+        servername: resolved.hostname,
+
+        family: resolved.family,
+
+        // Prevent Node from performing another DNS lookup.
+        lookup: (
+          _hostname,
+          _options,
+          callback,
+        ) => {
+          callback(
+            null,
+            resolved.address,
+            resolved.family,
+          );
+        },
+
+        headers: {
+          Host: url.host,
+          Accept: '*/*',
+        },
+
+        rejectUnauthorized: true,
+      },
+      (res) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+
+        resolve({
+          statusCode: res.statusCode ?? 0,
+          headers: res.headers,
+          body: res,
+        });
+      },
+    );
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(
+        new Error('Remote request timed out'),
+      );
+    });
+
+    req.once('error', fail);
+
+    req.end();
+  });
 }
 
 export async function secureDownloadToFile(
@@ -273,17 +414,20 @@ export async function secureDownloadToFile(
 ): Promise<void> {
   const maxRedirects = Math.max(
     0,
-    opts.maxRedirects ?? DEFAULT_MAX_REDIRECTS,
+    opts.maxRedirects ??
+      DEFAULT_MAX_REDIRECTS,
   );
 
   const connectTimeoutMs = Math.max(
     1_000,
-    opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
+    opts.connectTimeoutMs ??
+      DEFAULT_CONNECT_TIMEOUT_MS,
   );
 
   const totalTimeoutMs = Math.max(
     connectTimeoutMs,
-    opts.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS,
+    opts.totalTimeoutMs ??
+      DEFAULT_TOTAL_TIMEOUT_MS,
   );
 
   const maxBytes = Math.max(
@@ -296,17 +440,35 @@ export async function secureDownloadToFile(
   try {
     currentUrl = new URL(rawUrl);
   } catch {
-    throw AppError.badRequest('Invalid URL', 'SSRF_BLOCKED');
+    throw AppError.badRequest(
+      'Invalid URL',
+      'SSRF_BLOCKED',
+    );
   }
 
-  const deadline = Date.now() + totalTimeoutMs;
+  const deadline =
+    Date.now() + totalTimeoutMs;
 
-  let response: Response | undefined;
+  let response: PinnedResponse | undefined;
 
-  for (let hop = 0; hop <= maxRedirects; hop++) {
-    await validateUrl(currentUrl, opts.allowedHosts);
+  for (
+    let hop = 0;
+    hop <= maxRedirects;
+    hop++
+  ) {
+    /*
+     * Resolve + validate the hostname.
+     *
+     * The returned IP is then passed directly to
+     * requestPinned(), preventing DNS rebinding.
+     */
+    const resolved = await validateUrl(
+      currentUrl,
+      opts.allowedHosts,
+    );
 
-    const remaining = deadline - Date.now();
+    const remaining =
+      deadline - Date.now();
 
     if (remaining <= 0) {
       throw AppError.badRequest(
@@ -315,16 +477,32 @@ export async function secureDownloadToFile(
       );
     }
 
-    response = await fetchWithTimeout(
+    /*
+     * Use the first validated address.
+     *
+     * If that address fails, fail closed instead of
+     * resolving the hostname again to potentially
+     * obtain a different address.
+     */
+    response = await requestPinned(
       currentUrl,
-      Math.min(connectTimeoutMs, remaining),
+      resolved[0],
+      Math.min(
+        connectTimeoutMs,
+        remaining,
+      ),
     );
 
     if (
-      response.status >= 300 &&
-      response.status < 400
+      response.statusCode >= 300 &&
+      response.statusCode < 400
     ) {
-      const location = response.headers.get('location');
+      const location = getHeader(
+        response.headers,
+        'location',
+      );
+
+      response.body.resume();
 
       if (!location) {
         throw AppError.badRequest(
@@ -340,10 +518,11 @@ export async function secureDownloadToFile(
         );
       }
 
-      let redirectedUrl: URL;
-
       try {
-        redirectedUrl = new URL(location, currentUrl);
+        currentUrl = new URL(
+          location,
+          currentUrl,
+        );
       } catch {
         throw AppError.badRequest(
           'Invalid redirect URL',
@@ -351,13 +530,15 @@ export async function secureDownloadToFile(
         );
       }
 
-      // Validate the NEXT URL before following it.
+      /*
+       * Validate redirected URL before making
+       * the next network request.
+       */
       await validateUrl(
-        redirectedUrl,
+        currentUrl,
         opts.allowedHosts,
       );
 
-      currentUrl = redirectedUrl;
       continue;
     }
 
@@ -371,39 +552,63 @@ export async function secureDownloadToFile(
     );
   }
 
-  if (!response.ok) {
+  if (
+    response.statusCode < 200 ||
+    response.statusCode >= 300
+  ) {
+    response.body.resume();
+
     throw new Error(
-      `Failed to download remote resource: ${response.status}`,
+      `Failed to download remote resource: ${response.statusCode}`,
     );
   }
 
-  if (opts.allowedContentTypePrefixes?.length) {
+  if (
+    opts.allowedContentTypePrefixes?.length
+  ) {
     const contentType = (
-      response.headers.get('content-type') || ''
+      getHeader(
+        response.headers,
+        'content-type',
+      ) || ''
     ).toLowerCase();
 
-    const allowed = opts.allowedContentTypePrefixes.some(
-      (prefix) => contentType.startsWith(prefix.toLowerCase()),
-    );
+    const allowed =
+      opts.allowedContentTypePrefixes.some(
+        (prefix) =>
+          contentType.startsWith(
+            prefix.toLowerCase(),
+          ),
+      );
 
     if (!allowed) {
+      response.body.resume();
+
       throw AppError.badRequest(
-        `Unexpected content-type: ${contentType || 'unknown'}`,
+        `Unexpected content-type: ${
+          contentType || 'unknown'
+        }`,
         'REMOTE_CONTENT_TYPE_INVALID',
       );
     }
   }
 
   const contentLengthHeader =
-    response.headers.get('content-length');
+    getHeader(
+      response.headers,
+      'content-length',
+    );
 
   if (contentLengthHeader) {
-    const contentLength = Number(contentLengthHeader);
+    const contentLength =
+      Number(contentLengthHeader);
 
     if (
       !Number.isFinite(contentLength) ||
       contentLength < 0
     ) {
+      response.body.resume();
+
       throw AppError.badRequest(
         'Invalid remote content length',
         'REMOTE_SIZE_INVALID',
@@ -411,6 +616,8 @@ export async function secureDownloadToFile(
     }
 
     if (contentLength > maxBytes) {
+      response.body.resume();
+
       throw AppError.badRequest(
         'Remote resource exceeds maximum allowed size',
         'REMOTE_SIZE_EXCEEDED',
@@ -418,59 +625,68 @@ export async function secureDownloadToFile(
     }
   }
 
-  const body = response.body;
-
-  if (!body) {
-    throw new Error('Empty response body');
-  }
-
-  await fs.mkdir(path.dirname(destPath), {
-    recursive: true,
-  });
-
-  const nodeReadable = Readable.fromWeb(body as any);
+  await fs.mkdir(
+    path.dirname(destPath),
+    {
+      recursive: true,
+    },
+  );
 
   let received = 0;
 
-  const limiter = new Readable({
+  const limited = new Readable({
     read() {},
   });
 
-  nodeReadable.on('data', (chunk: Buffer) => {
-    received += chunk.length;
+  const source = response.body;
 
-    if (received > maxBytes) {
-      nodeReadable.destroy(
-        new Error(
-          'Remote resource exceeded maximum allowed size',
-        ),
-      );
-      return;
-    }
+  source.on(
+    'data',
+    (chunk: Buffer) => {
+      received += chunk.length;
 
-    limiter.push(chunk);
+      if (received > maxBytes) {
+        source.destroy(
+          new Error(
+            'Remote resource exceeded maximum allowed size',
+          ),
+        );
+
+        return;
+      }
+
+      limited.push(chunk);
+    },
+  );
+
+  source.on('end', () => {
+    limited.push(null);
   });
 
-  nodeReadable.on('end', () => {
-    limiter.push(null);
-  });
-
-  nodeReadable.on('error', (error) => {
-    limiter.destroy(error);
-  });
+  source.on(
+    'error',
+    (error) => {
+      limited.destroy(error);
+    },
+  );
 
   const timeout = setTimeout(() => {
-    nodeReadable.destroy(
-      new Error('Remote download exceeded timeout'),
+    source.destroy(
+      new Error(
+        'Remote download exceeded timeout',
+      ),
     );
   }, Math.max(0, deadline - Date.now()));
 
   try {
     await pipeline(
-      limiter,
-      createWriteStream(destPath, {
-        flags: 'wx',
-      }),
+      limited,
+      createWriteStream(
+        destPath,
+        {
+          flags: 'wx',
+        },
+      ),
     );
   } finally {
     clearTimeout(timeout);
@@ -482,7 +698,8 @@ export async function secureDownloadToBuffer(
   opts: SecureFetchOptions = {},
 ): Promise<Buffer> {
   const maxBytes =
-    opts.maxBytes ?? 25 * 1024 * 1024;
+    opts.maxBytes ??
+    25 * 1024 * 1024;
 
   const tmpPath = path.join(
     os.tmpdir(),
@@ -499,20 +716,21 @@ export async function secureDownloadToBuffer(
       },
     );
 
-    return await fs.readFile(tmpPath);
+    return await fs.readFile(
+      tmpPath,
+    );
   } finally {
     try {
       await fs.unlink(tmpPath);
     } catch {
-      // Best effort cleanup.
+      // Best-effort cleanup.
     }
   }
 }
 
 /**
- * Approved Google hosts used by the video provider.
- *
- * Keep this exact-host allowlist. Do not replace it with a wildcard.
+ * Known Google hosts legitimately used
+ * by Gemini/Veo.
  */
 export const GOOGLE_PROVIDER_HOSTS = [
   'generativelanguage.googleapis.com',
