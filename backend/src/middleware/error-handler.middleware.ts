@@ -39,6 +39,14 @@ export function errorHandler(
       message = 'Database request error';
       code = err.code;
     }
+  } else if (err instanceof Prisma.PrismaClientValidationError) {
+    // Thrown when a request reaches Prisma with a value it rejects (e.g. an
+    // invalid enum) that upstream Zod validation didn't already catch.
+    // Belt-and-suspenders: routes should validate first, but this keeps any
+    // gap from surfacing as a raw 500 with an internal Prisma stack trace.
+    statusCode = 400;
+    message = 'Invalid request data';
+    code = 'VALIDATION_ERROR';
   } else if (err.name === 'ValidationError') {
     statusCode = 400;
     message = err.message;

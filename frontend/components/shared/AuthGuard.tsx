@@ -6,14 +6,13 @@ import { useAuth } from "@/lib/hooks/useAuth";
 import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
 
 /**
- * Backs up `middleware.ts`'s cookie check. The middleware redirect covers
- * the common case (no session at all) before the page ever renders, but it
- * can't see whether the JWT it found is still *valid* — that's only known
- * once `useAuth` hits `GET /user` and gets a real answer. If that comes
- * back unauthenticated (expired/invalid token, refresh failed, cookies
- * blocked, etc.) we redirect here instead of ever rendering `children` and
- * having a page's own fetch fail with a raw "Authentication token missing"
- * error card.
+ * The only auth gate in the app — `proxy.ts` (Next's middleware
+ * convention) is a deliberate no-op; see the comment there for why. This
+ * component calls `useAuth`, which hits `GET /user` relying on the
+ * browser's session cookie. If that comes back unauthenticated (no
+ * session, expired session, cookies blocked, etc.) we redirect here
+ * instead of ever rendering `children` and having a page's own fetch fail
+ * with a raw "Authentication token missing" error card.
  */
 export function AuthGuard({ children }: { children: React.ReactNode }) {
   return (

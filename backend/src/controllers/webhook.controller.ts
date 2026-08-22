@@ -28,9 +28,3 @@ export const notificationController = {
   },
 };
 
-export const queueWebhookController = {
-  async handle(req: Request, res: Response) {
-    // Reserved for internal queue/webhook callbacks (e.g. BullMQ dashboard integrations)
-    res.json({ success: true, data: { received: true } });
-  },
-};

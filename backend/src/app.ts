@@ -9,7 +9,6 @@ import { generalRateLimiter } from './middleware/rate-limit.middleware';
 import { notFoundHandler, errorHandler } from './middleware/error-handler.middleware';
 import v1Routes from './routes/v1';
 import stripeWebhookRoutes from './routes/webhooks/stripe.routes';
-import queueWebhookRoutes from './routes/webhooks/queue.routes';
 import { connectDatabase, disconnectDatabase } from './config/database';
 import { connectRedis, disconnectRedis } from './config/redis';
 import { logger } from './utils/logger';
@@ -36,7 +35,6 @@ export function createApp(): Express {
   });
 
   app.use(config.apiPrefix, v1Routes);
-  app.use('/api/webhooks/queue', queueWebhookRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

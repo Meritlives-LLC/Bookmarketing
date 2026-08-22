@@ -1,180 +1,73 @@
 import { z } from 'zod';
+import {
+  VisualStyle,
+  VideoAspectRatio,
+  SubtitleMode,
+  SubtitleStyle,
+  CameraMovement,
+  CameraSpeed,
+  CameraRig,
+  CameraAngle,
+  CameraFraming,
+  FocusMode,
+  DepthOfField,
+  MovementPurpose,
+} from '@prisma/client';
 
-const idSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(100)
-  .regex(
-    /^[A-Za-z0-9_-]+$/,
-    'Invalid identifier',
-  );
+export const createVideoProjectSchema = z.object({
+  name: z.string().trim().min(1).max(300).optional(),
+  visualStyle: z.nativeEnum(VisualStyle).optional(),
+  aspectRatio: z.nativeEnum(VideoAspectRatio).optional(),
+  resolution: z.string().trim().max(50).optional(),
+  videoModel: z.string().trim().max(100).optional(),
+  subtitleEnabled: z.boolean().optional(),
+  subtitleMode: z.nativeEnum(SubtitleMode).optional(),
+  subtitleStyle: z.nativeEnum(SubtitleStyle).optional(),
+  subtitleConfig: z.record(z.string(), z.unknown()).optional(),
+  narrationWordsPerMinute: z.number().int().min(60).max(300).optional(),
+}).strict();
 
-const shortText = (
-  max: number,
-) =>
-  z
-    .string()
-    .trim()
-    .min(1)
-    .max(max);
+// videoProjectController.generate reads only req.body?.sceneId.
+export const generateVideoSchema = z.object({
+  sceneId: z.string().trim().min(1).max(100).optional(),
+}).strict();
 
-const optionalText = (
-  max: number,
-) =>
-  z
-    .string()
-    .trim()
-    .max(max)
-    .optional();
+// Matches videoProjectService.updateScenePrompt's { visualPrompt?, negativePrompt?, cameraPlan? }.
+export const updateScenePromptSchema = z.object({
+  visualPrompt: z.string().trim().min(1).max(10_000).optional(),
+  negativePrompt: z.string().trim().max(10_000).optional(),
+  cameraPlan: z.string().trim().max(10_000).optional(),
+}).strict();
 
-export const createVideoProjectSchema =
-  z
-    .object({
-      name: optionalText(200),
+// Matches the `allowed` field list + cameraKeys in videoProjectService.updateShotPrompt.
+export const updateShotPromptSchema = z.object({
+  visualPrompt: z.string().trim().max(10_000).optional(),
+  camera: z.string().trim().max(10_000).optional(),
+  shotType: z.string().trim().max(100).optional(),
+  durationSec: z.number().positive().max(120).optional(),
+  cameraMovement: z.nativeEnum(CameraMovement).optional(),
+  cameraSpeed: z.nativeEnum(CameraSpeed).optional(),
+  cameraDirection: z.string().trim().max(200).optional(),
+  cameraAngle: z.nativeEnum(CameraAngle).optional(),
+  cameraRig: z.nativeEnum(CameraRig).optional(),
+  lens: z.string().trim().max(50).optional(),
+  focalLength: z.string().trim().max(50).optional(),
+  framing: z.nativeEnum(CameraFraming).optional(),
+  composition: z.string().trim().max(200).optional(),
+  focusMode: z.nativeEnum(FocusMode).optional(),
+  depthOfField: z.nativeEnum(DepthOfField).optional(),
+  movementPurpose: z.nativeEnum(MovementPurpose).optional(),
+  movement: z.string().trim().max(200).optional(),
+  lighting: z.string().trim().max(500).optional(),
+  negativePrompt: z.string().trim().max(10_000).optional(),
+  recompilePrompt: z.boolean().optional(),
+}).strict();
 
-      visualStyle: z
-        .enum([
-          'CINEMATIC_REALISM',
-          'ANIMATION',
-          'ANIME',
-          'DOCUMENTARY',
-          'FANTASY',
-          'CUSTOM',
-        ])
-        .optional(),
-
-      aspectRatio: z
-        .enum([
-          'RATIO_16_9',
-          'RATIO_9_16',
-          'RATIO_1_1',
-        ])
-        .optional(),
-
-      resolution: optionalText(20),
-
-      videoModel:
-        optionalText(100),
-
-      subtitleEnabled:
-        z.boolean().optional(),
-
-      subtitleMode: z
-        .enum([
-          'OFF',
-          'SOFT',
-          'BURNED_IN',
-        ])
-        .optional(),
-
-      subtitleStyle: z
-        .enum([
-          'CLASSIC',
-          'MODERN',
-          'CINEMATIC',
-          'MINIMAL',
-          'BOLD',
-          'CUSTOM',
-        ])
-        .optional(),
-
-      subtitleConfig:
-        z
-          .record(
-            z.string().max(100),
-            z.unknown(),
-          )
-          .optional(),
-
-      narrationWordsPerMinute:
-        z
-          .number()
-          .int()
-          .min(60)
-          .max(300)
-          .optional(),
-    })
-    .strict();
-
-export const sceneIdSchema =
-  z
-    .object({
-      sceneId:
-        idSchema.optional(),
-    })
-    .strict();
-
-export const updateScenePromptSchema =
-  z
-    .object({
-      prompt:
-        shortText(20_000),
-    })
-    .strict();
-
-export const updateShotPromptSchema =
-  z
-    .object({
-      prompt:
-        shortText(20_000),
-    })
-    .strict();
-
-export const subtitleSettingsSchema =
-  z
-    .object({
-      enabled:
-        z.boolean().optional(),
-
-      mode: z
-        .enum([
-          'OFF',
-          'SOFT',
-          'BURNED_IN',
-        ])
-        .optional(),
-
-      style: z
-        .enum([
-          'CLASSIC',
-          'MODERN',
-          'CINEMATIC',
-          'MINIMAL',
-          'BOLD',
-          'CUSTOM',
-        ])
-        .optional(),
-
-      config:
-        z
-          .record(
-            z.string().max(100),
-            z.unknown(),
-          )
-          .optional(),
-    })
-    .strict();
-
-export function parseVideoBody<T>(
-  schema: z.ZodType<T>,
-  body: unknown,
-): T {
-  const result =
-    schema.safeParse(
-      body ?? {},
-    );
-
-  if (!result.success) {
-    throw new Error(
-      result.error.issues
-        .map(
-          (issue) =>
-            `${issue.path.join('.')}: ${issue.message}`,
-        )
-        .join('; '),
-    );
-  }
-
-  return result.data;
-}
+// Matches videoProjectService.updateSubtitleSettings's
+// { subtitleMode?, subtitleStyle?, subtitleConfig?, subtitleEnabled? }.
+export const updateSubtitleSettingsSchema = z.object({
+  subtitleMode: z.nativeEnum(SubtitleMode).optional(),
+  subtitleStyle: z.nativeEnum(SubtitleStyle).optional(),
+  subtitleConfig: z.record(z.string(), z.unknown()).optional(),
+  subtitleEnabled: z.boolean().optional(),
+}).strict();
