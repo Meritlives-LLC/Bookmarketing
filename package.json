@@ -6,7 +6,14 @@
   },
   "scripts": {
     "build": "npm install && npm ci --prefix backend && npm run build --prefix backend && npm ci --prefix frontend && npm run build --prefix frontend",
-    "start": "npm run prisma:migrate:deploy --prefix backend && npm run prisma:seed --prefix backend && concurrently -k -n backend,frontend,worker-audit,worker-ai,worker-video,worker-email,worker-analytics,cron \"PORT=4000 npm run start:app --prefix backend\" \"PORT=$PORT npm run start --prefix frontend\" \"npm run start:worker:audit --prefix backend\" \"npm run start:worker:ai --prefix backend\" \"npm run start:worker:book-video --prefix backend\" \"npm run start:worker:email --prefix backend\" \"npm run start:worker:analytics --prefix backend\" \"npm run start:cron --prefix backend\""
+    "start": "npm run start:web",
+    "start:web": "npm run prisma:migrate:deploy --prefix backend && npm run prisma:seed --prefix backend && concurrently -k -n backend,frontend \"PORT=4000 npm run start:app --prefix backend\" \"PORT=$PORT npm run start --prefix frontend\"",
+    "start:worker:audit": "npm run start:worker:audit --prefix backend",
+    "start:worker:ai": "npm run start:worker:ai --prefix backend",
+    "start:worker:book-video": "npm run start:worker:book-video --prefix backend",
+    "start:worker:email": "npm run start:worker:email --prefix backend",
+    "start:worker:analytics": "npm run start:worker:analytics --prefix backend",
+    "start:cron": "npm run start:cron --prefix backend"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
