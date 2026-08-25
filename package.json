@@ -6,7 +6,7 @@
   },
   "scripts": {
     "build": "npm install && npm ci --prefix backend && npm run build --prefix backend && npm ci --prefix frontend && npm run build --prefix frontend",
-    "start": "concurrently -k -n backend,frontend \"PORT=4000 npm run start --prefix backend\" \"PORT=$PORT npm run start --prefix frontend\""
+    "start": "npm run prisma:migrate:deploy --prefix backend && npm run prisma:seed --prefix backend && concurrently -k -n backend,frontend,worker-audit,worker-ai,worker-video,worker-email,worker-analytics,cron \"PORT=4000 npm run start:app --prefix backend\" \"PORT=$PORT npm run start --prefix frontend\" \"npm run start:worker:audit --prefix backend\" \"npm run start:worker:ai --prefix backend\" \"npm run start:worker:book-video --prefix backend\" \"npm run start:worker:email --prefix backend\" \"npm run start:worker:analytics --prefix backend\" \"npm run start:cron --prefix backend\""
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

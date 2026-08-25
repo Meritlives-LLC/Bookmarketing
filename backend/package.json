@@ -11,7 +11,8 @@
     "postinstall": "prisma generate",
     "dev": "tsx watch src/app.ts",
     "build": "tsc -p tsconfig.build.json",
-    "start": "prisma migrate deploy && node dist/app.js",
+    "start": "prisma migrate deploy && npm run prisma:seed && node dist/app.js",
+    "start:app": "node dist/app.js",
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "test": "jest",
@@ -27,7 +28,16 @@
     "worker:book-video": "tsx src/workers/book-video.worker.ts",
     "worker:email": "tsx src/workers/email.worker.ts",
     "worker:analytics": "tsx src/workers/analytics.worker.ts",
-    "cron": "tsx src/cron/index.ts"
+    "cron": "tsx src/cron/index.ts",
+    "start:worker:audit": "node dist/workers/scraper.worker.js",
+    "start:worker:ai": "node dist/workers/ai.worker.js",
+    "start:worker:book-video": "node dist/workers/book-video.worker.js",
+    "start:worker:email": "node dist/workers/email.worker.js",
+    "start:worker:analytics": "node dist/workers/analytics.worker.js",
+    "start:cron": "node dist/cron/index.js"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1116.0",
