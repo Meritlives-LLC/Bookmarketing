@@ -1,6 +1,16 @@
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ||
-  "http://localhost:4000/api/v1";
+// Same-origin by default so this works behind the Next.js rewrite in
+// next.config.mjs (`/api/:path*` -> BACKEND_INTERNAL_URL), which is what
+// lets one Render (or any single-service host) URL serve both the
+// frontend and the API — no separate backend URL/CORS hookup needed.
+//
+// Only set NEXT_PUBLIC_API_URL when the API genuinely lives on a
+// different origin (e.g. local dev without the rewrite, or a split
+// two-service deployment). It's a NEXT_PUBLIC_ var, so it's baked into
+// the client bundle at build time — an absolute "http://localhost:4000"
+// value only ever resolves for whoever's machine that literally is,
+// which breaks the moment the built bundle runs anywhere else.
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL || "/api/v1";
 
 export class ApiError extends Error {
   constructor(

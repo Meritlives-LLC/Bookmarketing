@@ -5,7 +5,7 @@ import { ArrowLeft, Clapperboard, FileText, Loader2, Play, Pause, RefreshCw, Che
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { api, ApiError } from "@/lib/api/client";
+import { api, ApiError, API_BASE } from "@/lib/api/client";
 
 type Manuscript = { id: string; originalFileName: string; fileType: string; fileSize: number; extractionStatus: string; extractedWordCount?: number; chapters?: Array<{ id: string; chapterNumber: number; title?: string; wordCount: number }>; };
 type Shot = {
@@ -72,12 +72,8 @@ export default function BookVideoStudioPage({ params }: { params: Promise<{ id: 
       const form = new FormData();
       form.append("manuscript", uploadFile);
 
-      const base =
-        process.env.NEXT_PUBLIC_API_URL ||
-        "http://localhost:4000/api/v1";
-
       const res = await fetch(
-        `${base}/books/${bookId}/manuscript`,
+        `${API_BASE}/books/${bookId}/manuscript`,
         {
           method: "POST",
           credentials: "include",
