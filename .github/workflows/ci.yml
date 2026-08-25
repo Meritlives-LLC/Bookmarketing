@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# No production secrets are used here. DATABASE_URL/JWT secrets below are
+# throwaway values for a disposable CI Postgres service, not real
+# credentials, so `prisma migrate deploy` + `jest` can run against a real
+# database without touching anything production-related.
+env:
+  NODE_ENV: test
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bookmarketingos_test
+  JWT_ACCESS_SECRET: ci-access-secret-not-for-production
+  JWT_REFRESH_SECRET: ci-refresh-secret-not-for-production
+  CORS_ORIGIN: http://localhost:3000
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.1-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bookmarketingos_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.10.0'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prisma generate
+        run: npx prisma generate
+
+      - name: Typecheck / build
+        run: npm run build
+
+      - name: Verify worker + cron entrypoints compiled
+        run: |
+          test -f dist/workers/scraper.worker.js
+          test -f dist/workers/ai.worker.js
+          test -f dist/workers/book-video.worker.js
+          test -f dist/workers/email.worker.js
+          test -f dist/workers/analytics.worker.js
+          test -f dist/cron/index.js
+          test -f dist/app.js
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Run tests
+        run: npm test -- --ci
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.10.0'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_URL: /api/v1
+        run: npm run build

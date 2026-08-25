@@ -1,0 +1,164 @@
+version: '3.9'
+
+# Full-stack production compose. This is the piece the per-service
+# `backend/docker-compose.prod.yml` doesn't cover: it only ever
+# containerized the API, published on its own host port, with no frontend
+# service at all. Deploying that alone means either giving the API its own
+# public URL (a split two-origin deployment) or running the frontend
+# separately by some other means — both defeat the single-origin
+# architecture (see DEPLOYMENT.md) that CORS_ORIGIN, the cookie
+# `sameSite: 'lax'` setting, and the Next.js rewrite are all built around.
+#
+# Here, `frontend` is the ONLY service with a published host port. It
+# proxies /api/* to `api` over the internal Docker network
+# (BACKEND_INTERNAL_URL=http://api:4000), so the browser only ever talks to
+# one origin, exactly like the Render/Railway `start:web` path.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# Put a TLS-terminating reverse proxy (nginx, Caddy, Traefik, your cloud
+# LB) in front of `frontend`'s published port for a real domain + HTTPS;
+# that's deployment-specific and intentionally left out of this file.
+
+services:
+  postgres:
+    image: postgres:16.1-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-bookmarketingos}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-postgres}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Private — no `ports:`. Only reachable from other containers on this
+  # compose network (frontend's rewrite, and the workers/cron below).
+  api:
+    build:
+      context: ./backend
+      target: runtime
+    restart: unless-stopped
+    expose:
+      - '4000'
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # The one public service. Serves the frontend and proxies /api/* to `api`
+  # so the browser only ever sees this origin.
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - '${FRONTEND_PORT:-3000}:3000'
+    environment:
+      BACKEND_INTERNAL_URL: http://api:4000
+    env_file: .env.production
+    depends_on:
+      - api
+
+  worker-audit:
+    build:
+      context: ./backend
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/scraper.worker.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-book-video:
+    build:
+      context: ./backend
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/book-video.worker.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-ai:
+    build:
+      context: ./backend
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/ai.worker.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-email:
+    build:
+      context: ./backend
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/email.worker.js
+    env_file: .env.production
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker-analytics:
+    build:
+      context: ./backend
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/workers/analytics.worker.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Run exactly one instance — see DEPLOYMENT.md.
+  cron:
+    build:
+      context: ./backend
+      target: runtime
+    restart: unless-stopped
+    entrypoint: []
+    command: node dist/cron/index.js
+    env_file: .env.production
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

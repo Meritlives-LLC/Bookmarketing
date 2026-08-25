@@ -122,3 +122,42 @@ book-video worker, or email worker cannot take down Express, Next.js, or
 each other. Scale each worker service's instance count independently based
 on its queue's throughput; run the cron service at exactly 1 instance to
 avoid duplicate scheduled jobs.
+
+## Docker / Kubernetes / VPS
+
+`docker-compose.prod.yml` (repo root) containerizes the same architecture:
+`frontend` is the only service with a published port, and it proxies
+`/api/*` to the private `api` service over the compose network
+(`BACKEND_INTERNAL_URL=http://api:4000`) — the same single-origin setup as
+the process-based path above, just with `frontend` playing the role of the
+public entrypoint instead of `concurrently`. `api`, the six workers, and
+`cron` build from `backend/Dockerfile`; `frontend` builds from
+`frontend/Dockerfile` (a Next.js `output: "standalone"` image).
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+```
+
+Put a TLS-terminating reverse proxy (nginx, Caddy, Traefik, or your cloud's
+load balancer) in front of `frontend`'s published port for a real domain —
+that's environment-specific and intentionally left out of the compose file.
+The same images work unmodified under Kubernetes/ECS/Cloud Run: one
+Deployment/Service for `frontend` (publicly routable), one internal-only
+Deployment/Service for `api`, and one Deployment per worker + cron, all
+pointed at managed Postgres/Redis instead of the compose Postgres/Redis
+containers.
+
+`backend/docker-compose.yml` and `backend/docker-compose.prod.yml` still
+exist for running the backend alone (e.g. local backend development against
+a separately-run frontend); they predate `docker-compose.prod.yml` and
+publish the API's port directly, which is fine for that narrower use case
+but is not the single-origin production setup described above.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every PR and push to `main`: backend
+(`prisma generate`, typecheck/build, verifies every worker/cron entrypoint
+actually compiled, lint, `prisma migrate deploy` + `jest` against a
+disposable Postgres service container) and frontend (`next build`). It uses
+throwaway secrets for the CI-only Postgres instance — no production
+credentials are involved, and CI does not deploy anything.

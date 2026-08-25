@@ -1,5 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Enables a self-contained `.next/standalone` build (server + only the
+  // node_modules it actually needs) so the Docker runtime image doesn't
+  // have to ship the full node_modules tree. Has no effect outside `next
+  // build`/Docker — `next dev` and Render/Railway's `next start` both
+  // ignore it, so this is additive and doesn't change any existing
+  // non-Docker deployment path.
+  output: "standalone",
   images: {
     formats: ["image/avif", "image/webp"],
     deviceSizes: [160, 320, 400, 640, 768, 1024],
