@@ -21,7 +21,7 @@ import type { NextRequest } from "next/server";
 // `domain` is set to a parent domain shared with the frontend (or API
 // calls are proxied same-origin) — otherwise it will reproduce this exact
 // bug.
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   return NextResponse.next();
 }
 

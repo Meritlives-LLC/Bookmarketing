@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Clapperboard, FileText, Loader2, Play, Pause, RefreshCw, CheckCircle2, AlertCircle, Film, Pencil, Save, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,8 +19,8 @@ type Scene = { id: string; sceneNumber: number; status: string; sourceText: stri
 type VideoProject = { id: string; name: string; status: string; progress: number; totalChapters: number; totalScenes: number; completedScenes: number; visualStyle: string; aspectRatio: string; subtitleEnabled: boolean; subtitleMode: string; subtitleStyle: string; finalVideoUrl?: string; cleanVideoUrl?: string; subtitleVideoUrl?: string; srtUrl?: string; vttUrl?: string; assUrl?: string; errorMessage?: string; filmBible?: { premise?: string; genre?: string; tone?: string }; scenes?: Scene[]; characters?: Array<{ id: string; name: string; referenceImageUrl?: string }>; locations?: Array<{ id: string; name: string; referenceImageUrl?: string }> };
 type Progress = { projectId: string; status: string; progress: number; totalChapters: number; totalScenes: number; completedScenes: number; stageLabel: string; errorMessage?: string };
 
-export default function BookVideoStudioPage({ params }: { params: { id: string } }) {
-  const bookId = params.id;
+export default function BookVideoStudioPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id: bookId } = use(params);
   const [manuscript, setManuscript] = useState<Manuscript | null>(null);
   const [active, setActive] = useState<VideoProject | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);

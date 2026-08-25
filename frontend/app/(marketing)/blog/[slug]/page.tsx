@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 
-export default function BlogPostPage({
+export default async function BlogPostPage({
   params,
 }: {
-  params: { slug: string };
+  params: Promise<{ slug: string }>;
 }) {
-  const title = params.slug
+  const { slug } = await params;
+  const title = slug
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");

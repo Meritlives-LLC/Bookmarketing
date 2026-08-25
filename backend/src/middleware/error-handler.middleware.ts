@@ -1,8 +1,15 @@
 import { Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
+import { MulterError } from 'multer';
 import { AppError } from '../utils/helpers';
 import { logger } from '../utils/logger';
 import { config } from '../config';
+
+const MULTER_ERROR_MESSAGES: Record<string, string> = {
+  LIMIT_FILE_SIZE: 'Uploaded file exceeds the allowed size limit.',
+  LIMIT_FILE_COUNT: 'Too many files in this upload.',
+  LIMIT_UNEXPECTED_FILE: 'Unexpected file field in this upload.',
+};
 
 export function notFoundHandler(req: Request, _res: Response, next: NextFunction): void {
   next(AppError.notFound(`Route not found: ${req.method} ${req.originalUrl}`));
@@ -50,6 +57,13 @@ export function errorHandler(
   } else if (err.name === 'ValidationError') {
     statusCode = 400;
     message = err.message;
+  } else if (err instanceof MulterError) {
+    // Multer's own middleware calls next(err) directly on a bad upload
+    // (oversized file, wrong field name, too many files) — without this
+    // branch that surfaced as a generic 500 instead of a client-fixable 400.
+    statusCode = 400;
+    message = MULTER_ERROR_MESSAGES[err.code] ?? 'File upload error';
+    code = err.code;
   }
 
   if (statusCode >= 500) {
