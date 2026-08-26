@@ -1,4 +1,9 @@
 /** @type {import('next').NextConfig} */
+import { fileURLToPath } from "url";
+import path from "path";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 const nextConfig = {
   // Enables a self-contained `.next/standalone` build (server + only the
   // node_modules it actually needs) so the Docker runtime image doesn't
@@ -7,6 +12,12 @@ const nextConfig = {
   // ignore it, so this is additive and doesn't change any existing
   // non-Docker deployment path.
   output: "standalone",
+  // This repo has a package-lock.json at both the monorepo root and here
+  // in frontend/, which makes Next.js infer the monorepo root as the
+  // tracing root instead of this directory. That silently nests the
+  // standalone server at .next/standalone/frontend/server.js instead of
+  // .next/standalone/server.js. Pinning it here keeps the output flat.
+  outputFileTracingRoot: __dirname,
   images: {
     formats: ["image/avif", "image/webp"],
     deviceSizes: [160, 320, 400, 640, 768, 1024],
