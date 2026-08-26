@@ -120,8 +120,8 @@ export function reasonCameraPlan(ctx: ShotCameraContext): ShotCameraPlan {
     framing = 'MEDIUM_CLOSE_UP';
   }
   const movementPlan = movementForPurpose(purpose, framing, ctx);
-  const { speed, rig, angle } = movementPlan;
-  let { movement } = movementPlan;
+  const { speed } = movementPlan;
+  let { movement, rig, angle } = movementPlan;
 
   // Continuity: avoid immediate reverse moves
   const prev = ctx.previous?.cameraMovement;
