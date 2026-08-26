@@ -3,7 +3,7 @@ import { requireBullConnection } from '../queues/connection';
 import { processManuscriptExtractionJob } from '../queues/processors/manuscript.processor';
 import { processBookVideoJob } from '../queues/processors/book-video.processor';
 import { logger } from '../utils/logger';
-import { connectDatabase } from '../config/database';
+import { connectDatabase, disconnectDatabase } from '../config/database';
 import { reconcileStuckBookVideoWork } from './reconcile-book-video';
 
 async function start() {
@@ -24,6 +24,15 @@ async function start() {
   videoWorker.on('completed', (job) => logger.info('Book-video job completed', { jobId: job.id, name: job.name }));
   videoWorker.on('failed', (job, err) => logger.error('Book-video job failed', { jobId: job?.id, name: job?.name, error: err.message }));
   logger.info('Book-video worker started (queues: book-manuscript, book-video)');
+
+  const shutdown = async (signal: string) => {
+    logger.info(`Received ${signal}, closing book-video worker gracefully...`);
+    await Promise.all([manuscriptWorker.close(), videoWorker.close()]);
+    await disconnectDatabase();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 start().catch((error) => {
   logger.error('Failed to start book-video worker', { error: (error as Error).message });

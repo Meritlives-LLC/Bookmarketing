@@ -2,7 +2,7 @@ import { Worker } from 'bullmq';
 import { requireBullConnection } from '../queues/connection';
 import { processCreativeJob } from '../queues/processors/creative.processor';
 import { logger } from '../utils/logger';
-import { connectDatabase } from '../config/database';
+import { connectDatabase, disconnectDatabase } from '../config/database';
 
 async function start() {
   const connection = requireBullConnection();
@@ -19,6 +19,15 @@ async function start() {
   );
 
   logger.info('AI/creative worker started');
+
+  const shutdown = async (signal: string) => {
+    logger.info(`Received ${signal}, closing AI worker gracefully...`);
+    await worker.close();
+    await disconnectDatabase();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 start().catch((error) => {

@@ -2,7 +2,7 @@ import { Worker } from 'bullmq';
 import { requireBullConnection } from '../queues/connection';
 import { analyticsService } from '../services/analytics.service';
 import { logger } from '../utils/logger';
-import { connectDatabase } from '../config/database';
+import { connectDatabase, disconnectDatabase } from '../config/database';
 
 interface AnalyticsJobData {
   bookId: string;
@@ -43,6 +43,15 @@ async function start() {
   );
 
   logger.info('Analytics worker started');
+
+  const shutdown = async (signal: string) => {
+    logger.info(`Received ${signal}, closing analytics worker gracefully...`);
+    await worker.close();
+    await disconnectDatabase();
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 start().catch((error) => {
