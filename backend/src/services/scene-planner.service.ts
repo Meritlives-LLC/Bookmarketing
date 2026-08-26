@@ -126,7 +126,13 @@ function buildVisualPrompt(opts: {
   return parts.join('. ');
 }
 
-async function callScenePlan(chapterText: string, chapterNumber: number, title: string | null, filmStyle: string, characters: string[], locations: string[]) {
+type ExtractedEvent = {
+  summary?: string; sourceExcerpt?: string | null; subject?: string | null; action?: string | null;
+  object?: string | null; participants?: string[]; props?: string[]; emotion?: string | null;
+  timeHint?: string | null; locationHint?: string | null;
+};
+
+async function callScenePlan(chapterText: string, chapterNumber: number, title: string | null, filmStyle: string, characters: string[], locations: string[], events: ExtractedEvent[]) {
   const apiKey = config.ai.groq.apiKey;
   if (!apiKey) {
     // Offline: full hierarchical deterministic segmentation (100% coverage)
@@ -147,7 +153,7 @@ async function callScenePlan(chapterText: string, chapterNumber: number, title: 
         model: config.ai.groq.model || 'openai/gpt-oss-120b', temperature: 0.15, response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: 'Segment this text into cinematic scenes+shots. sourceStart/sourceEnd are 0-based offsets RELATIVE TO THIS CHUNK covering the ENTIRE chunk with no gaps/overlaps. Do NOT rewrite story or invent an event. Every scene MUST contain a concise action that is directly supported by its exact source range; reuse the source verbs/objects where possible. Only list characters, locations, objects, relationships and emotional beats supported by that range or its immediate textual context. For each shot include structured camera fields: cameraMovement (STATIC|PUSH_IN|PULL_OUT|TRACKING|FOLLOW|PAN_LEFT|PAN_RIGHT|DOLLY_IN|HANDHELD|CRANE_UP|...), cameraSpeed (VERY_SLOW|SLOW|MEDIUM|FAST|VERY_FAST), cameraRig, cameraAngle, framing, focalLength, focusMode, depthOfField, movementPurpose. Prefer STATIC when motion is not motivated. Consider continuity between consecutive shots. Return JSON {scenes:[...]}.' },
-          { role: 'user', content: `Chapter ${chapterNumber}${title ? `: ${title}` : ''} chunk ${chunk.index + 1}/${chunks.length}\nStyle: ${filmStyle}\nCharacters: ${characters.join(', ') || 'none'}\nLocations: ${locations.join(', ') || 'none'}\nChunk length: ${chunk.text.length}\n\n${chunk.text}` },
+          { role: 'user', content: `Chapter ${chapterNumber}${title ? `: ${title}` : ''} chunk ${chunk.index + 1}/${chunks.length}\nStyle: ${filmStyle}\nCharacters: ${characters.join(', ') || 'none'}\nLocations: ${locations.join(', ') || 'none'}\nBook-extracted event evidence (use only where its excerpt overlaps this chunk; the chunk text remains authoritative): ${JSON.stringify(events)}\nChunk length: ${chunk.text.length}\n\n${chunk.text}` },
         ],
       }),
       signal: AbortSignal.timeout(config.ai.groq.timeoutMs),
@@ -178,13 +184,17 @@ export const scenePlannerService = {
     const locations = project.locations || [];
     const filmStyle = project.visualStyle.replace(/_/g, ' ').toLowerCase();
     const wpm = project.narrationWordsPerMinute || 150;
+    const bibleAnalysis = Array.isArray((project.filmBible?.rawAnalysis as unknown))
+      ? (project.filmBible?.rawAnalysis as Array<{ chapterNumber?: number; events?: ExtractedEvent[] }>)
+      : [];
     const chapters = chapterId ? project.manuscript.chapters.filter((c) => c.id === chapterId) : project.manuscript.chapters;
     if (!chapterId) await videoSceneRepository.deleteByProject(videoProjectId);
     let totalScenes = 0;
     for (const chapter of chapters) {
       let plan;
       try {
-        plan = await callScenePlan(chapter.sourceText, chapter.chapterNumber, chapter.title, filmStyle, characters.map((c) => c.name), locations.map((l) => l.name));
+        const chapterEvents = bibleAnalysis.find((analysis) => analysis.chapterNumber === chapter.chapterNumber)?.events ?? [];
+        plan = await callScenePlan(chapter.sourceText, chapter.chapterNumber, chapter.title, filmStyle, characters.map((c) => c.name), locations.map((l) => l.name), chapterEvents);
       } catch (error) {
         logger.error('Scene plan failed — deterministic segmentation fallback', { error: (error as Error).message });
         const segs = segmentChapterDeterministic(chapter.sourceText, { targetWordsPerScene: 350, wpm });

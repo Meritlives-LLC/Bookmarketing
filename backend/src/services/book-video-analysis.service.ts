@@ -34,7 +34,16 @@ const ChapterAnalysisSchema = z.object({
     culturalContext: z.string().nullable().optional(),
   })).default([]),
   props: z.array(z.object({ name: z.string(), description: z.string().nullable().optional() })).default([]),
-  events: z.array(z.object({ summary: z.string(), timeHint: z.string().nullable().optional(), locationHint: z.string().nullable().optional() })).default([]),
+  // Event records are retained in FilmBible.rawAnalysis. sourceExcerpt is
+  // evidence from this exact chunk, while the structured roles let later
+  // planners preserve meaning instead of reconstructing a plot from themes.
+  events: z.array(z.object({
+    summary: z.string(), sourceExcerpt: z.string().nullable().optional(),
+    subject: z.string().nullable().optional(), action: z.string().nullable().optional(),
+    object: z.string().nullable().optional(), participants: z.array(z.string()).default([]),
+    props: z.array(z.string()).default([]), emotion: z.string().nullable().optional(),
+    timeHint: z.string().nullable().optional(), locationHint: z.string().nullable().optional(),
+  })).default([]),
   themes: z.array(z.string()).default([]), tone: z.string().nullable().optional(),
 });
 const FilmBibleSchema = z.object({
@@ -97,7 +106,9 @@ export const bookVideoAnalysisService = {
               + 'stereotypical imagery from a country or region name alone — for example, do not assume safari '
               + 'animals, huts, or tribal dress for an African setting, or thatched cottages for a rural English '
               + 'one, unless the text itself describes them. Different countries are not interchangeable: Nigeria, '
-              + 'Ghana, Kenya, and South Africa each have distinct settings and must not be conflated. Return JSON.',
+              + 'Ghana, Kenya, and South Africa each have distinct settings and must not be conflated. For every important '
+              + 'event, retain a short exact sourceExcerpt plus the supported subject, action, object, participants, props, '
+              + 'emotion, timeHint and locationHint; leave any unknown field null/empty. Return JSON.',
             `Chapter ${chapter.chapterNumber}${chapter.title ? `: ${chapter.title}` : ''} — chunk ${chunk.index + 1}/${chunks.length}\n\n${chunk.text}`,
             ChapterAnalysisSchema,
             `chapter-${chapter.chapterNumber}-chunk-${chunk.index}`

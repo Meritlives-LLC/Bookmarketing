@@ -72,7 +72,9 @@ export async function enqueueAssembleFilm(data: AssembleJobData) {
 export async function isQueueAvailable(): Promise<boolean> {
   if (!bookVideoQueue) return false;
   try {
-    const client = await bookVideoQueue.client;
+    // BullMQ exposes the underlying ioredis client through a narrower
+    // interface that omits ping(), although ioredis does provide it.
+    const client = await bookVideoQueue.client as unknown as { ping(): Promise<string> };
     const pong = await Promise.race([
       client.ping(),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Redis ping timed out')), 3000)),

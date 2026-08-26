@@ -127,7 +127,7 @@ class GeminiVeoProvider implements VideoProvider {
       const validated = await assertRemoteUrlAllowed(uri);
 
       if (
-        !GOOGLE_PROVIDER_HOSTS.includes(
+        !(GOOGLE_PROVIDER_HOSTS as readonly string[]).includes(
           validated.hostname,
         )
       ) {

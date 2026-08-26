@@ -16,7 +16,7 @@ const DEFAULT_TOTAL_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_BYTES = 200 * 1024 * 1024;
 
 export interface SecureFetchOptions {
-  allowedHosts?: string[];
+  allowedHosts?: readonly string[];
   maxRedirects?: number;
   connectTimeoutMs?: number;
   totalTimeoutMs?: number;
@@ -125,7 +125,7 @@ function normalizeHost(hostname: string): string {
 
 function hostAllowed(
   hostname: string,
-  allowedHosts?: string[],
+  allowedHosts?: readonly string[],
 ): boolean {
   if (!allowedHosts?.length) {
     return true;
@@ -230,7 +230,7 @@ async function resolveAndValidateHost(
 
 async function validateUrl(
   url: URL,
-  allowedHosts?: string[],
+  allowedHosts?: readonly string[],
 ): Promise<ResolvedHost[]> {
   if (url.protocol !== 'https:') {
     throw AppError.badRequest(
@@ -366,11 +366,7 @@ function requestPinned(
           _options,
           callback,
         ) => {
-          callback(
-            null,
-            resolved.address,
-            resolved.family,
-          );
+          callback(null, [{ address: resolved.address, family: resolved.family }]);
         },
 
         headers: {

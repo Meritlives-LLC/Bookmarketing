@@ -131,4 +131,38 @@ describe('validateSceneGrounding', () => {
     expect(result.ok).toBe(false);
     expect(result.issues.join(' ')).toMatch(/Object.*not supported|Emotional context/i);
   });
+
+  describe('semantic event meaning', () => {
+    const john = [{ name: 'John' }];
+    const house = [{ name: 'the house' }];
+
+    it('accepts the source event and a directional paraphrase', () => {
+      expect(validateSceneGrounding(
+        { sourceText: 'John entered the house.', characters: ['John'], location: 'the house', action: 'John walked into the house' }, john, house
+      ).ok).toBe(true);
+    });
+
+    it('rejects leaving when the source says entering', () => {
+      const result = validateSceneGrounding(
+        { sourceText: 'John entered the house.', characters: ['John'], location: 'the house', action: 'John left the house' }, john, house
+      );
+      expect(result.ok).toBe(false);
+      expect(result.issues.join(' ')).toMatch(/contradicts/i);
+    });
+
+    it('rejects an invented attack despite shared subject and object tokens', () => {
+      const result = validateSceneGrounding(
+        { sourceText: 'John ran away from the burning house.', characters: ['John'], location: 'the house', action: 'John attacked the burning house' }, john, house
+      );
+      expect(result.ok).toBe(false);
+      expect(result.issues.join(' ')).toMatch(/contradicts|not supported/i);
+    });
+
+    it('rejects calm walking when the source says Mary fled the village', () => {
+      const result = validateSceneGrounding(
+        { sourceText: 'Mary ran away from the village.', characters: ['Mary'], location: 'the village', action: 'Mary walked calmly through the village' }, [{ name: 'Mary' }], [{ name: 'the village' }]
+      );
+      expect(result.ok).toBe(false);
+    });
+  });
 });

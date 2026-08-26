@@ -36,6 +36,43 @@ function evidenceSupports(claim: string, source: string, ignored: string[] = [])
   return claimWords.some((word) => evidence.has(word));
 }
 
+type EventMeaning = 'SUPPORTED' | 'CONTRADICTORY' | 'UNSUPPORTED';
+/**
+ * Small, explicit semantic vocabulary for the high-impact event changes a
+ * visual planner is likely to make. It is intentionally narrow: unknown
+ * verbs still use the lexical evidence fallback below, rather than claiming
+ * that a brittle parser understands arbitrary prose.
+ */
+const EVENT_FAMILIES: Record<string, string[]> = {
+  ENTER: ['enter', 'entered', 'entering', 'walk into', 'walked into', 'go into', 'went into', 'arrive', 'arrived'],
+  LEAVE: ['leave', 'left', 'exit', 'exited', 'walk out', 'walked out', 'depart', 'departed'],
+  FLEE: ['flee', 'fled', 'escape', 'escaped', 'run away', 'ran away'],
+  ATTACK: ['attack', 'attacked', 'fight', 'fought', 'strike', 'struck', 'assault'],
+  BURN: ['burn', 'burned', 'burnt', 'set fire', 'set ablaze', 'ignite', 'ignited'],
+  TAKE: ['take', 'took', 'steal', 'stole', 'grab', 'grabbed'],
+  LOSE: ['lose', 'lost', 'drop', 'dropped', 'give away', 'gave away'],
+  RECEIVE: ['receive', 'received', 'accept', 'accepted', 'get', 'got'],
+  SIT: ['sit', 'sat', 'seated'],
+};
+const CONTRADICTORY_FAMILIES: Record<string, string[]> = {
+  ENTER: ['LEAVE'], LEAVE: ['ENTER'], FLEE: ['ATTACK', 'SIT'], ATTACK: ['FLEE'], TAKE: ['LOSE'], LOSE: ['TAKE', 'RECEIVE'], RECEIVE: ['LOSE'],
+};
+function eventFamilies(text: string): string[] {
+  const normalized = normalize(text);
+  return Object.entries(EVENT_FAMILIES).filter(([, variants]) => variants.some((variant) => normalized.includes(variant))).map(([family]) => family);
+}
+function validateEventMeaning(claim: string, source: string, ignored: string[]): EventMeaning {
+  const sourceFamilies = eventFamilies(source);
+  const claimFamilies = eventFamilies(claim);
+  if (claimFamilies.some((family) => sourceFamilies.some((sourceFamily) => (CONTRADICTORY_FAMILIES[sourceFamily] ?? []).includes(family)))) return 'CONTRADICTORY';
+  // A recognised visual action must be represented by the same semantic
+  // family in the source. This catches shared-noun failures such as
+  // "ran away from the burning house" -> "attacked the burning house".
+  if (claimFamilies.length && !claimFamilies.every((family) => sourceFamilies.includes(family))) return 'UNSUPPORTED';
+  if (claimFamilies.length) return 'SUPPORTED';
+  return evidenceSupports(claim, source, ignored) ? 'SUPPORTED' : 'UNSUPPORTED';
+}
+
 export function canonicalCharacterName(value: string, knownCharacters: GroundingCharacter[]): string | null {
   const found = knownCharacters.find((character) => phrases(character).includes(normalize(value)));
   return found?.name ?? null;
@@ -64,7 +101,11 @@ export function validateSceneGrounding(scene: SceneGroundingInput, knownCharacte
     if (!knownProps.some((item) => normalize(item.name) === normalize(prop)) || !evidenceSupports(prop, sourceText)) issues.push(`Object "${prop}" is not supported by this scene's source excerpt.`);
   }
   if (!scene.action?.trim()) issues.push('Scene has no structured action/event summary.');
-  else if (!evidenceSupports(scene.action, sourceText, [...knownCharacters.flatMap(phrases), scene.location ?? ''])) issues.push(`Action/event "${scene.action}" is not supported by this scene's source excerpt.`);
+  else {
+    const meaning = validateEventMeaning(scene.action, sourceText, [...knownCharacters.flatMap(phrases), scene.location ?? '']);
+    if (meaning === 'CONTRADICTORY') issues.push(`Action/event "${scene.action}" contradicts the source event in this scene excerpt.`);
+    else if (meaning === 'UNSUPPORTED') issues.push(`Action/event "${scene.action}" is not supported by this scene's source excerpt.`);
+  }
   if (scene.emotionalBeat?.trim()) {
     const emotion = normalize(scene.emotionalBeat);
     if (Object.entries(EMOTION_OPPOSITES).some(([word, opposites]) => emotion.includes(word) && opposites.some((opposite) => normalize(sourceText).includes(opposite)))) issues.push(`Emotional context "${scene.emotionalBeat}" contradicts this scene's source excerpt.`);
