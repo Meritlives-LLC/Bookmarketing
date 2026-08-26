@@ -26,12 +26,24 @@ export function selectGroundedShotSource(sceneSource: string | null | undefined,
 }
 function phrases(character: GroundingCharacter): string[] { return [character.name, ...(character.aliases ?? [])].map(normalize).filter(Boolean); }
 function phraseAppears(character: GroundingCharacter, text: string): boolean { const haystack = ` ${normalize(text)} `; return phrases(character).some((phrase) => haystack.includes(` ${phrase} `)); }
+function uniqueGivenName(character: GroundingCharacter, all: GroundingCharacter[]): string | null {
+  const givenName = normalize(character.name).split(' ')[0];
+  if (!givenName || givenName === normalize(character.name)) return null;
+  return all.filter((candidate) => normalize(candidate.name).split(' ')[0] === givenName).length === 1
+    ? givenName
+    : null;
+}
+function characterMentioned(character: GroundingCharacter, text: string, all: GroundingCharacter[]): boolean {
+  if (phraseAppears(character, text)) return true;
+  const givenName = uniqueGivenName(character, all);
+  return Boolean(givenName && ` ${normalize(text)} `.includes(` ${givenName} `));
+}
 
 /** Resolve aliases directly, and pronouns only from a nearby unambiguous antecedent. */
 function characterSupported(character: GroundingCharacter, source: string, context: string, all: GroundingCharacter[]): boolean {
-  if (phraseAppears(character, source)) return true;
+  if (characterMentioned(character, source, all)) return true;
   if (!/\b(she|her|hers|he|him|his|they|them|their)\b/i.test(source)) return false;
-  const candidates = all.filter((candidate) => phraseAppears(candidate, context.slice(-700)));
+  const candidates = all.filter((candidate) => characterMentioned(candidate, context.slice(-700), all));
   return candidates.length === 1 && normalize(candidates[0].name) === normalize(character.name);
 }
 function evidenceSupports(claim: string, source: string, ignored: string[] = []): boolean {
@@ -71,7 +83,7 @@ const CONTRADICTORY_FAMILIES: Record<string, string[]> = {
   ENTER: ['LEAVE'], LEAVE: ['ENTER'], FLEE: ['ATTACK', 'SIT'], ATTACK: ['FLEE'], TAKE: ['LOSE'], LOSE: ['TAKE', 'RECEIVE'], RECEIVE: ['LOSE'], DISCOVER: ['HIDE'], HIDE: ['DISCOVER'],
 };
 const CINEMATIC_SUBACTIONS: Record<string, string[]> = { ENTER: ['APPROACH', 'OPEN_DOOR'] };
-const SEMANTIC_FILLERS = new Set(['inside', 'into', 'toward', 'towards', 'through', 'away', 'door', 'then', 'calmly', 'quickly']);
+const SEMANTIC_FILLERS = new Set(['inside', 'into', 'toward', 'towards', 'through', 'away', 'door', 'then']);
 function eventFamilies(text: string): string[] {
   const normalized = normalize(text);
   return Object.entries(EVENT_FAMILIES).filter(([, variants]) => variants.some((variant) => normalized.includes(variant))).map(([family]) => family);
@@ -106,9 +118,11 @@ function validateEventMeaning(claim: string, source: string, ignored: string[]):
     || sourceFamilies.some((sourceFamily) => (CINEMATIC_SUBACTIONS[sourceFamily] ?? []).includes(family));
   if (claimFamilies.length && !claimFamilies.every(supportedFamily)) return 'UNSUPPORTED';
   if (claimFamilies.length) return eventPayloadSupported(claim, source, ignored) ? 'SUPPORTED' : 'UNSUPPORTED';
-  // Exact source language is safe for deterministic/offline plans. Unknown
-  // paraphrases are not: lexical overlap alone is never proof of an event.
-  return normalize(claim) === normalize(source) ? 'SUPPORTED' : 'UNSUPPORTED';
+  // Unknown verbs still fail closed when an action introduces a word absent
+  // from the source (e.g. "watched the fire" -> "started the fire"). A
+  // complete lexical rendering permits safe inflectional paraphrases such as
+  // "greeting" -> "greeted" without treating shared nouns as proof.
+  return eventPayloadSupported(claim, source, ignored) ? 'SUPPORTED' : 'UNSUPPORTED';
 }
 
 export function canonicalCharacterName(value: string, knownCharacters: GroundingCharacter[]): string | null {

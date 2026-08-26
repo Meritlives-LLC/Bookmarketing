@@ -58,7 +58,7 @@ describe('validateSceneGrounding', () => {
       knownLocations
     );
     expect(result.ok).toBe(false);
-    expect(result.issues.join(' ')).toMatch(/does not appear in this scene's own source text/i);
+    expect(result.issues.join(' ')).toMatch(/not supported by this scene excerpt/i);
   });
 
   it('fails a scene that claims a location never extracted from the book (invented setting)', () => {
@@ -103,7 +103,7 @@ describe('validateSceneGrounding', () => {
     expect(result.issues.join(' ')).toMatch(/action.event.*not supported/i);
   });
 
-  it('rejects a known location when this scene's source supports a different place', () => {
+  it("rejects a known location when this scene's source supports a different place", () => {
     const result = validateSceneGrounding(
       { sourceText: 'Ada walked through the market square.', characters: ['Adaeze Okafor'], location: 'the family compound', action: 'Ada walked through the market square' },
       knownCharacters, knownLocations

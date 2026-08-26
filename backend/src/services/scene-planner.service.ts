@@ -255,7 +255,7 @@ export const scenePlannerService = {
           },
         });
         // Ensure shot durations respect provider max (~8s); split oversize shots
-        let rawShots = proposal.shots?.length
+        const rawShots = proposal.shots?.length
           ? proposal.shots
           : [{ shotNumber: 1, shotType: 'medium', durationSec: estimatedDurationSec, startOffsetSec: 0, visualPrompt }];
         const expanded: Array<Record<string, any>> = [];

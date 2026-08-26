@@ -114,12 +114,14 @@ function compositionFor(framing: CameraFraming, angle: CameraAngle): string {
 }
 
 export function reasonCameraPlan(ctx: ShotCameraContext): ShotCameraPlan {
-  let purpose = purposeFromContext(ctx);
+  const purpose = purposeFromContext(ctx);
   let framing = framingForPurpose(purpose, ctx);
   if (ctx.previous?.framing === 'EXTREME_WIDE' && framing === 'EXTREME_CLOSE_UP' && ctx.shotNumber > 2) {
     framing = 'MEDIUM_CLOSE_UP';
   }
-  let { movement, speed, rig, angle } = movementForPurpose(purpose, framing, ctx);
+  const movementPlan = movementForPurpose(purpose, framing, ctx);
+  const { speed, rig, angle } = movementPlan;
+  let { movement } = movementPlan;
 
   // Continuity: avoid immediate reverse moves
   const prev = ctx.previous?.cameraMovement;

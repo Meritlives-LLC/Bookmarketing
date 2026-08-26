@@ -31,6 +31,8 @@ export interface AuthenticatedUser {
   role: 'AUTHOR' | 'ADMIN' | 'SUPER_ADMIN';
 }
 
+// Express augments Request through a global namespace declaration.
+// eslint-disable-next-line @typescript-eslint/no-namespace
 declare global {
   namespace Express {
     interface Request {

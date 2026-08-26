@@ -9,7 +9,10 @@ export const apiKeyService = {
   async list(userId: string) {
     const keys = await apiKeyRepository.findManyForUser(userId);
     // Never return keyHash to the client.
-    return keys.map(({ keyHash: _keyHash, ...rest }) => rest);
+    return keys.map(({ keyHash, ...rest }) => {
+      void keyHash;
+      return rest;
+    });
   },
 
   async create(userId: string, name: string) {
@@ -27,7 +30,8 @@ export const apiKeyService = {
     }
 
     const { key, prefix, hash } = generateApiKey();
-    const { keyHash: _keyHash, ...record } = await apiKeyRepository.create(userId, name, hash, prefix);
+    const { keyHash, ...record } = await apiKeyRepository.create(userId, name, hash, prefix);
+    void keyHash;
 
     // The raw key is only ever returned once, at creation time.
     return { ...record, rawKey: key };

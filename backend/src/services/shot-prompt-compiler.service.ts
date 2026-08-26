@@ -9,7 +9,6 @@ import {
   buildLocationCulturalClause,
   culturalNegativeConstraints,
   type ShotCameraPlan,
-  type CompileShotPromptInput,
   type CompiledShotPrompt,
 } from '../cinematography';
 

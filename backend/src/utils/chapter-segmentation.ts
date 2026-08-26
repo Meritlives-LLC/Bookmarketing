@@ -80,8 +80,8 @@ interface HeadingCandidate {
 
 const NAMED_SECTION_PATTERN =
   /^(prologue|epilogue|foreword|afterword|introduction|preface|interlude|intermission|coda)\b[:.\-–—]?\s*(.*)$/i;
-const CHAPTER_PATTERN = /^(?:chapter|ch\.)\s+([a-z0-9\-]+)\b[:.\-–—]?\s*(.*)$/i;
-const PART_PATTERN = /^part\s+([a-z0-9\-]+)\b[:.\-–—]?\s*(.*)$/i;
+const CHAPTER_PATTERN = /^(?:chapter|ch\.)\s+([a-z0-9-]+)\b[:.\-–—]?\s*(.*)$/i;
+const PART_PATTERN = /^part\s+([a-z0-9-]+)\b[:.\-–—]?\s*(.*)$/i;
 const BARE_NUMBER_PATTERN = /^(\d{1,4})[.\)]?$/;
 const BARE_ROMAN_PATTERN = /^([IVXLCDM]{1,7})$/; // uppercase only — lowercase roman-looking words are too ambiguous
 
