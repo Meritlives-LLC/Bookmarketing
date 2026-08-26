@@ -1,7 +1,7 @@
 import { validateSceneGrounding } from '../../src/services/scene-grounding-validator.service';
 
 describe('validateSceneGrounding', () => {
-  const knownCharacters = [{ name: 'Adaeze Okafor' }, { name: 'Baba Tunde' }];
+  const knownCharacters = [{ name: 'Adaeze Okafor', aliases: ['Ada'] }, { name: 'Baba Tunde', aliases: ['Uncle Tunde'] }];
   const knownLocations = [
     { name: 'the family compound', country: 'Nigeria', city: 'Lagos', culturalContext: 'Yoruba compound with corrugated iron roofing' },
   ];
@@ -12,6 +12,7 @@ describe('validateSceneGrounding', () => {
         sourceText: 'Adaeze crossed the compound, greeting Baba Tunde at the gate.',
         characters: ['Adaeze Okafor', 'Baba Tunde'],
         location: 'the family compound',
+        action: 'Adaeze crossed the compound and greeted Baba Tunde',
       },
       knownCharacters,
       knownLocations
@@ -22,7 +23,7 @@ describe('validateSceneGrounding', () => {
 
   it('fails a scene with no source text at all — nothing to trace to the book', () => {
     const result = validateSceneGrounding(
-      { sourceText: '', characters: ['Adaeze Okafor'], location: 'the family compound' },
+      { sourceText: '', characters: ['Adaeze Okafor'], location: 'the family compound', action: 'Adaeze crosses the compound' },
       knownCharacters,
       knownLocations
     );
@@ -36,6 +37,7 @@ describe('validateSceneGrounding', () => {
         sourceText: 'A stranger appeared in the doorway.',
         characters: ['Someone Made Up'],
         location: null,
+        action: 'A stranger appeared in the doorway',
       },
       knownCharacters,
       knownLocations
@@ -50,6 +52,7 @@ describe('validateSceneGrounding', () => {
         sourceText: 'Baba Tunde sat alone in the quiet compound.',
         characters: ['Adaeze Okafor'],
         location: 'the family compound',
+        action: 'Baba Tunde sat alone',
       },
       knownCharacters,
       knownLocations
@@ -64,6 +67,7 @@ describe('validateSceneGrounding', () => {
         sourceText: 'Adaeze walked through the market square.',
         characters: ['Adaeze Okafor'],
         location: 'a generic African village',
+        action: 'Adaeze walked through the market square',
       },
       knownCharacters,
       knownLocations
@@ -74,7 +78,7 @@ describe('validateSceneGrounding', () => {
 
   it('allows a scene with no location claimed at all (nothing invented)', () => {
     const result = validateSceneGrounding(
-      { sourceText: 'Adaeze thought about the letter for a long time.', characters: ['Adaeze Okafor'], location: null },
+      { sourceText: 'Adaeze thought about the letter for a long time.', characters: ['Adaeze Okafor'], location: null, action: 'Adaeze thought about the letter' },
       knownCharacters,
       knownLocations
     );
@@ -83,10 +87,48 @@ describe('validateSceneGrounding', () => {
 
   it('matches a character referred to by only their first name in the excerpt', () => {
     const result = validateSceneGrounding(
-      { sourceText: 'Adaeze smiled quietly to herself.', characters: ['Adaeze Okafor'], location: null },
+      { sourceText: 'Adaeze smiled quietly to herself.', characters: ['Adaeze Okafor'], location: null, action: 'Adaeze smiled quietly' },
       knownCharacters,
       knownLocations
     );
     expect(result.ok).toBe(true);
+  });
+
+  it('rejects a real character at a real location when the event is invented', () => {
+    const result = validateSceneGrounding(
+      { sourceText: 'Ada escaped from the burning compound.', characters: ['Adaeze Okafor'], location: 'the family compound', action: 'Ada walks peacefully through a market' },
+      knownCharacters, knownLocations
+    );
+    expect(result.ok).toBe(false);
+    expect(result.issues.join(' ')).toMatch(/action.event.*not supported/i);
+  });
+
+  it('rejects a known location when this scene's source supports a different place', () => {
+    const result = validateSceneGrounding(
+      { sourceText: 'Ada walked through the market square.', characters: ['Adaeze Okafor'], location: 'the family compound', action: 'Ada walked through the market square' },
+      knownCharacters, knownLocations
+    );
+    expect(result.ok).toBe(false);
+    expect(result.issues.join(' ')).toMatch(/Location.*not supported/i);
+  });
+
+  it('resolves an alias and a pronoun only through immediate context', () => {
+    const alias = validateSceneGrounding(
+      { sourceText: 'Ada opened the letter.', characters: ['Adaeze Okafor'], location: null, action: 'Ada opened the letter' }, knownCharacters, knownLocations
+    );
+    const pronoun = validateSceneGrounding(
+      { sourceText: 'She opened the letter.', contextText: 'Adaeze entered the house. ', characters: ['Adaeze Okafor'], location: null, action: 'She opened the letter' }, knownCharacters, knownLocations
+    );
+    expect(alias.ok).toBe(true);
+    expect(pronoun.ok).toBe(true);
+  });
+
+  it('rejects unsupported objects and contradictory emotional context', () => {
+    const result = validateSceneGrounding(
+      { sourceText: 'Ada wept beside the letter.', characters: ['Adaeze Okafor'], location: null, props: ['sword'], action: 'Ada wept beside the letter', emotionalBeat: 'joyful celebration' },
+      knownCharacters, knownLocations, [{ name: 'sword' }]
+    );
+    expect(result.ok).toBe(false);
+    expect(result.issues.join(' ')).toMatch(/Object.*not supported|Emotional context/i);
   });
 });

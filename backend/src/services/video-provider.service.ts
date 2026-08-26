@@ -22,6 +22,11 @@ export interface VideoProvider {
 class GeminiVeoProvider implements VideoProvider {
   readonly name = 'GEMINI_VEO';
 
+  private get timeoutMs(): number {
+    const value = Number.parseInt(process.env.VIDEO_PROVIDER_TIMEOUT_MS ?? '45000', 10);
+    return Number.isFinite(value) ? Math.min(120_000, Math.max(5_000, value)) : 45_000;
+  }
+
   private get apiKey(): string {
     const key = (
       process.env.GEMINI_API_KEY ??
@@ -226,6 +231,7 @@ class GeminiVeoProvider implements VideoProvider {
 
         // Never automatically follow a provider redirect.
         redirect: 'error',
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
 
       if (!res.ok) {
@@ -335,6 +341,7 @@ class GeminiVeoProvider implements VideoProvider {
           'x-goog-api-key': this.apiKey,
         },
         redirect: 'error',
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
 
       if (!res.ok) {

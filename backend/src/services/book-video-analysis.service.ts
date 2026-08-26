@@ -65,6 +65,7 @@ async function callStructuredJson<T extends z.ZodTypeAny>(systemPrompt: string, 
       response_format: { type: 'json_object' },
       messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
     }),
+    signal: AbortSignal.timeout(config.ai.groq.timeoutMs),
   });
   if (!res.ok) throw new Error(`Groq ${label} failed ${res.status}`);
   const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
@@ -147,12 +148,15 @@ export const bookVideoAnalysisService = {
       }
       await videoProjectRepository.update(videoProjectId, { progress: 5 + Math.round(((i + 1) / chapters.length) * 50) });
     }
+    // Events are carried into the synthesized Bible as well as rawAnalysis.
+    // The planner must never be asked to recreate story progression from a
+    // character/location/theme list alone.
     const aggregate = chapterAnalyses.map((a) =>
-      `Ch ${a.chapterNumber}: chars=[${a.characters.map((c) => c.name).join(', ')}] locs=[${a.locations.map((l) => l.name).join(', ')}] themes=[${a.themes.join(', ')}]`
+      `Ch ${a.chapterNumber}: chars=[${a.characters.map((c) => c.name).join(', ')}] locs=[${a.locations.map((l) => l.name).join(', ')}] events=${JSON.stringify(a.events)} themes=[${a.themes.join(', ')}]`
     ).join('\n');
     let bible: z.infer<typeof FilmBibleSchema> = {};
     try {
-      bible = await callStructuredJson('Build a Film Bible from chapter analyses only. Propose cinematic language. Return JSON.', aggregate, FilmBibleSchema, 'film-bible');
+      bible = await callStructuredJson('Build a Film Bible from chapter analyses only. Preserve every supplied event in timeline/narrativeRules with its chapter, action, location hint and time hint. Never invent events. Propose cinematic language separately. Return JSON.', aggregate, FilmBibleSchema, 'film-bible');
     } catch {
       bible = { themes: [...new Set(chapterAnalyses.flatMap((a) => a.themes))], tone: chapterAnalyses.find((a) => a.tone)?.tone ?? null };
     }

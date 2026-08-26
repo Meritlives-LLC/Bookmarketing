@@ -146,10 +146,11 @@ async function callScenePlan(chapterText: string, chapterNumber: number, title: 
       body: JSON.stringify({
         model: config.ai.groq.model || 'openai/gpt-oss-120b', temperature: 0.15, response_format: { type: 'json_object' },
         messages: [
-          { role: 'system', content: 'Segment this text into cinematic scenes+shots. sourceStart/sourceEnd are 0-based offsets RELATIVE TO THIS CHUNK covering the ENTIRE chunk with no gaps/overlaps. Do NOT rewrite story. For each shot include structured camera fields: cameraMovement (STATIC|PUSH_IN|PULL_OUT|TRACKING|FOLLOW|PAN_LEFT|PAN_RIGHT|DOLLY_IN|HANDHELD|CRANE_UP|...), cameraSpeed (VERY_SLOW|SLOW|MEDIUM|FAST|VERY_FAST), cameraRig, cameraAngle, framing, focalLength, focusMode, depthOfField, movementPurpose. Prefer STATIC when motion is not motivated. Consider continuity between consecutive shots. Return JSON {scenes:[...]}.' },
+          { role: 'system', content: 'Segment this text into cinematic scenes+shots. sourceStart/sourceEnd are 0-based offsets RELATIVE TO THIS CHUNK covering the ENTIRE chunk with no gaps/overlaps. Do NOT rewrite story or invent an event. Every scene MUST contain a concise action that is directly supported by its exact source range; reuse the source verbs/objects where possible. Only list characters, locations, objects, relationships and emotional beats supported by that range or its immediate textual context. For each shot include structured camera fields: cameraMovement (STATIC|PUSH_IN|PULL_OUT|TRACKING|FOLLOW|PAN_LEFT|PAN_RIGHT|DOLLY_IN|HANDHELD|CRANE_UP|...), cameraSpeed (VERY_SLOW|SLOW|MEDIUM|FAST|VERY_FAST), cameraRig, cameraAngle, framing, focalLength, focusMode, depthOfField, movementPurpose. Prefer STATIC when motion is not motivated. Consider continuity between consecutive shots. Return JSON {scenes:[...]}.' },
           { role: 'user', content: `Chapter ${chapterNumber}${title ? `: ${title}` : ''} chunk ${chunk.index + 1}/${chunks.length}\nStyle: ${filmStyle}\nCharacters: ${characters.join(', ') || 'none'}\nLocations: ${locations.join(', ') || 'none'}\nChunk length: ${chunk.text.length}\n\n${chunk.text}` },
         ],
       }),
+      signal: AbortSignal.timeout(config.ai.groq.timeoutMs),
     });
     if (!res.ok) throw new Error(`Scene plan AI failed ${res.status} on chunk ${chunk.index}`);
     const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
@@ -218,9 +219,13 @@ export const scenePlannerService = {
         const end = Math.max(start, Math.min(proposal.sourceEnd, chapter.sourceText.length));
         const sourceText = chapter.sourceText.slice(start, end);
         if (!sourceText.trim()) continue;
-        const matchedChars = characters.filter((c) => proposal.characters.some((n: string) => n.toLowerCase() === c.name.toLowerCase()));
+        // Keep an action even in offline/fallback plans: the exact source
+        // sentence is evidence, not a fabricated paraphrase. The validator
+        // later rejects an AI-proposed action that does not match this range.
+        const groundedAction = proposal.action?.trim() || sourceText.split(/(?<=[.!?])\s+/)[0].slice(0, 400);
+        const matchedChars = characters.filter((c) => proposal.characters.some((n: string) => n.toLowerCase() === c.name.toLowerCase() || (c.aliases || []).some((alias) => alias.toLowerCase() === n.toLowerCase())));
         const matchedLoc = locations.find((l) => proposal.location && l.name.toLowerCase() === proposal.location.toLowerCase()) ?? null;
-        const visualPrompt = buildVisualPrompt({ sourceText, filmStyle, characters: matchedChars, location: matchedLoc, action: proposal.action, shotType: proposal.shots?.[0]?.shotType });
+        const visualPrompt = buildVisualPrompt({ sourceText, filmStyle, characters: matchedChars, location: matchedLoc, action: groundedAction, shotType: proposal.shots?.[0]?.shotType });
         const wordCount = sourceText.split(/\s+/).filter(Boolean).length;
         const estimatedDurationSec = proposal.estimatedDurationSec ?? Math.max(4, Math.round((wordCount / wpm) * 60));
         const scene = await prisma.videoScene.create({
@@ -228,7 +233,7 @@ export const scenePlannerService = {
             videoProjectId, chapterId: chapter.id, sceneNumber: proposal.sceneNumber,
             sourceText, narrationText: sourceText, summary: proposal.summary ?? null,
             characters: proposal.characters, location: proposal.location ?? null, props: proposal.props,
-            action: proposal.action ?? null, emotionalBeat: proposal.emotionalBeat ?? null,
+            action: groundedAction, emotionalBeat: proposal.emotionalBeat ?? null,
             visualPrompt, negativePrompt: 'blurry, distorted faces, text overlay, watermark, low quality',
             estimatedDurationSec, sourceStart: start, sourceEnd: end, status: 'PROMPT_READY',
           },
@@ -263,7 +268,7 @@ export const scenePlannerService = {
             shotNumber: shot.shotNumber ?? si + 1,
             totalShotsInScene: totalShots,
             shotType: shot.shotType,
-            action: shot.action ?? proposal.action,
+            action: shot.action ?? groundedAction,
             emotionalBeat: proposal.emotionalBeat,
             locationKind: 'unknown',
             locationScale: 'unknown',

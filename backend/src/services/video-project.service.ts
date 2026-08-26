@@ -784,7 +784,7 @@ export const videoProjectService = {
   async processShotVideo(shotId: string): Promise<void> {
     const shot = await prisma.videoShot.findUnique({
       where: { id: shotId },
-      include: { scene: { include: { videoProject: { include: { characters: true, locations: true, props: true } } } } },
+      include: { scene: { include: { chapter: true, videoProject: { include: { characters: true, locations: true, props: true } } } } },
     });
     if (!shot) throw AppError.notFound('Shot not found');
     const scene = shot.scene;
@@ -801,9 +801,18 @@ export const videoProjectService = {
     // automatic retries, so it is force-failed rather than retried
     // indefinitely.
     const grounding = validateSceneGrounding(
-      { sourceText: scene.sourceText, characters: scene.characters, location: scene.location },
+      {
+        sourceText: scene.sourceText,
+        contextText: scene.chapter.sourceText.slice(Math.max(0, (scene.sourceStart ?? 0) - 700), scene.sourceStart ?? 0),
+        characters: scene.characters,
+        location: scene.location,
+        props: scene.props,
+        action: scene.action,
+        emotionalBeat: scene.emotionalBeat,
+      },
       project.characters || [],
-      project.locations || []
+      project.locations || [],
+      project.props || []
     );
     if (!grounding.ok) {
       const attempts = scene.groundingValidationAttempts ?? 0;
