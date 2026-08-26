@@ -6,6 +6,8 @@ import {
   compileShotPrompt,
   normalizeShotCamera,
   validateCameraPlan,
+  buildLocationCulturalClause,
+  culturalNegativeConstraints,
   type ShotCameraPlan,
   type CompileShotPromptInput,
   type CompiledShotPrompt,
@@ -17,7 +19,11 @@ export interface ShotCompileContext {
   negativePrompt?: string | null;
   filmStyle?: string | null;
   characters?: Array<{ name: string; physicalAppearance?: string | null; clothing?: string | null; continuityNotes?: string | null; referenceImageUrl?: string | null }>;
-  location?: { name: string; visualDescription?: string | null; environment?: string | null; architecture?: string | null; continuityNotes?: string | null } | null;
+  location?: {
+    name: string; visualDescription?: string | null; environment?: string | null; architecture?: string | null;
+    continuityNotes?: string | null; country?: string | null; city?: string | null; region?: string | null;
+    culturalContext?: string | null;
+  } | null;
   props?: Array<{ name: string; visualDescription?: string | null }>;
   locationKind?: 'interior' | 'exterior' | 'unknown';
   locationScale?: 'small' | 'medium' | 'large' | 'vast' | 'unknown';
@@ -85,6 +91,12 @@ export const shotPromptCompilerService = {
       const bits = [ctx.location.visualDescription, ctx.location.environment, ctx.location.architecture, ctx.location.continuityNotes]
         .filter(Boolean).join(' ');
       if (bits) continuityNotes.push(`Location ${ctx.location.name} locked: ${bits.slice(0, 180)}`);
+      // Book-grounded setting fidelity — country/city/culturalContext come
+      // only from what was extracted from the manuscript (see
+      // book-video-analysis.service.ts). Never fall back to a generic
+      // guess when these are absent.
+      const culturalClause = buildLocationCulturalClause(ctx.location);
+      if (culturalClause) continuityNotes.push(`Setting fidelity for ${ctx.location.name}: ${culturalClause.slice(0, 220)}`);
     }
     for (const p of ctx.props || []) {
       if (p.visualDescription) continuityNotes.push(`Prop ${p.name}: ${p.visualDescription.slice(0, 100)}`);
@@ -101,7 +113,8 @@ export const shotPromptCompilerService = {
         : 'Cinematic narrative moment');
 
     const autoNeg = cameraAwareNegatives(camera).join(', ');
-    const negative = [ctx.negativePrompt, autoNeg].filter(Boolean).join(', ');
+    const culturalNeg = culturalNegativeConstraints(ctx.location).join(', ');
+    const negative = [ctx.negativePrompt, autoNeg, culturalNeg].filter(Boolean).join(', ');
 
     return compileShotPrompt({
       baseVisual: base,

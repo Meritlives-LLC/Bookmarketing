@@ -21,6 +21,17 @@ const ChapterAnalysisSchema = z.object({
     name: z.string(), description: z.string().nullable().optional(),
     architecture: z.string().nullable().optional(), environment: z.string().nullable().optional(),
     timePeriod: z.string().nullable().optional(),
+    // Geography/culture: extract ONLY what the text states or clearly implies.
+    // Country/city must come from the manuscript, never from guessing at
+    // genre or author background. culturalContext holds specific markers
+    // the text actually describes (dress, architecture, customs, language) —
+    // it must stay null rather than be filled with generic assumptions
+    // about a country or region (e.g. do not infer "safari"/"tribal"
+    // imagery for an African setting unless the text describes it).
+    country: z.string().nullable().optional(),
+    city: z.string().nullable().optional(),
+    region: z.string().nullable().optional(),
+    culturalContext: z.string().nullable().optional(),
   })).default([]),
   props: z.array(z.object({ name: z.string(), description: z.string().nullable().optional() })).default([]),
   events: z.array(z.object({ summary: z.string(), timeHint: z.string().nullable().optional(), locationHint: z.string().nullable().optional() })).default([]),
@@ -77,7 +88,15 @@ export const bookVideoAnalysisService = {
         const partials: Array<z.output<typeof ChapterAnalysisSchema>> = [];
         for (const chunk of chunks) {
           const partial = await callStructuredJson(
-            'You are a film production analyst. Extract ONLY what appears in this text chunk. Do NOT invent facts. Return JSON.',
+            'You are a film production analyst. Extract ONLY what appears in this text chunk. Do NOT invent facts. '
+              + 'For each location, extract country/city/region ONLY if the text states or clearly implies them '
+              + '(a named place, a nationality mentioned for a character there, a described landmark) — leave them '
+              + 'null otherwise. Extract culturalContext ONLY as specific details the text actually describes '
+              + '(clothing, architecture, customs, food, language, social setting). Do NOT infer generic or '
+              + 'stereotypical imagery from a country or region name alone — for example, do not assume safari '
+              + 'animals, huts, or tribal dress for an African setting, or thatched cottages for a rural English '
+              + 'one, unless the text itself describes them. Different countries are not interchangeable: Nigeria, '
+              + 'Ghana, Kenya, and South Africa each have distinct settings and must not be conflated. Return JSON.',
             `Chapter ${chapter.chapterNumber}${chapter.title ? `: ${chapter.title}` : ''} — chunk ${chunk.index + 1}/${chunks.length}\n\n${chunk.text}`,
             ChapterAnalysisSchema,
             `chapter-${chapter.chapterNumber}-chunk-${chunk.index}`
@@ -113,6 +132,8 @@ export const bookVideoAnalysisService = {
           await videoLocationRepository.upsertByName(videoProjectId, loc.name, {
             description: loc.description ?? null, architecture: loc.architecture ?? null,
             environment: loc.environment ?? null, timePeriod: loc.timePeriod ?? null,
+            country: loc.country ?? null, city: loc.city ?? null, region: loc.region ?? null,
+            culturalContext: loc.culturalContext ?? null,
           });
         }
         for (const prop of analysis.props) {

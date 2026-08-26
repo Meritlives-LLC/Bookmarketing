@@ -3,4 +3,5 @@ export * from './camera-reasoning';
 export * from './camera-validation';
 export * from './compile-shot-prompt';
 export * from './legacy-normalize';
+export * from './cultural-fidelity';
 export * from './camera-continuity.validator';

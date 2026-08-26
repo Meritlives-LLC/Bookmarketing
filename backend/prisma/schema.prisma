@@ -637,6 +637,22 @@ model VideoLocation {
   visualDescription   String?
   referenceImageUrl   String?
   continuityNotes     String?
+  /// Country as stated/implied by the book text (e.g. "Nigeria"). Never
+  /// inferred from genre or author nationality — extraction must be
+  /// grounded in the actual manuscript. Null when the book doesn't say.
+  country             String?
+  /// City, village, or named locality from the book (e.g. "Lagos",
+  /// "a village outside Enugu"). Null when unspecified.
+  city                String?
+  /// Broader region/subdivision when the book specifies one but not a
+  /// city (e.g. "the Niger Delta", "the Scottish Highlands").
+  region              String?
+  /// Culturally-specific visual markers actually described in the book
+  /// (clothing, architecture, customs, language cues, social context).
+  /// This is a fidelity aid, not a stereotype generator — it must only
+  /// hold what the text supports, and stays null rather than being
+  /// filled with generic assumptions about the country/region.
+  culturalContext     String?
   createdAt           DateTime     @default(now())
   updatedAt           DateTime     @updatedAt
 
@@ -697,6 +713,12 @@ model VideoScene {
   lastErrorType         ProviderErrorType?
   errorMessage          String?
   retryCount            Int               @default(0)
+  /// Times this scene has been blocked by pre-generation grounding
+  /// validation (invented/unmatched character or location) — distinct
+  /// from retryCount, which tracks provider-side failures. Capped
+  /// separately since a grounding failure means the scene spec itself
+  /// needs a human fix, not another automatic attempt.
+  groundingValidationAttempts Int         @default(0)
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
 

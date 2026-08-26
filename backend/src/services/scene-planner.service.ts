@@ -12,6 +12,7 @@ import {
   repairCoverageOrFallback,
   assertFullCoverage,
 } from '../utils/deterministic-scene-segmentation';
+import { buildLocationCulturalClause } from '../cinematography';
 
 const SceneListSchema = z.object({
   scenes: z.array(z.object({
@@ -85,7 +86,10 @@ function toPlanScenes(
 function buildVisualPrompt(opts: {
   sourceText: string; filmStyle: string;
   characters: Array<{ name: string; physicalAppearance?: string | null; clothing?: string | null; continuityNotes?: string | null }>;
-  location?: { name: string; visualDescription?: string | null; environment?: string | null } | null;
+  location?: {
+    name: string; visualDescription?: string | null; environment?: string | null;
+    country?: string | null; city?: string | null; region?: string | null; culturalContext?: string | null;
+  } | null;
   action?: string | null; shotType?: string | null;
 }): string {
   const parts = [`${opts.filmStyle} cinematic film still`];
@@ -98,7 +102,23 @@ function buildVisualPrompt(opts: {
     return bits.join(', ');
   });
   if (charDescs.length) parts.push(`featuring ${charDescs.join('; ')}`);
-  if (opts.location) parts.push(`set in ${opts.location.name}${opts.location.visualDescription ? ', ' + opts.location.visualDescription : opts.location.environment ? ', ' + opts.location.environment : ''}`);
+  if (opts.location) {
+    // Prefer book-grounded country/city/culturalContext when available —
+    // falls back to the generic visualDescription/environment only when
+    // the analysis pass found no specific geography for this location.
+    const culturalClause = buildLocationCulturalClause(opts.location);
+    parts.push(
+      `set in ${opts.location.name}${
+        culturalClause
+          ? ', ' + culturalClause
+          : opts.location.visualDescription
+            ? ', ' + opts.location.visualDescription
+            : opts.location.environment
+              ? ', ' + opts.location.environment
+              : ''
+      }`
+    );
+  }
   if (opts.action) parts.push(opts.action);
   const excerpt = opts.sourceText.slice(0, 280).replace(/\s+/g, ' ').trim();
   if (excerpt) parts.push(`narrative moment: "${excerpt}"`);

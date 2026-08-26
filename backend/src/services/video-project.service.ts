@@ -17,6 +17,7 @@ import { shotPromptCompilerService } from './shot-prompt-compiler.service';
 import { ffmpegAssemblyService } from './ffmpeg-assembly.service';
 import { storageService } from './storage.service';
 import { secureDownloadToBuffer, GOOGLE_PROVIDER_HOSTS } from '../utils/secure-remote-fetch';
+import { validateSceneGrounding } from './scene-grounding-validator.service';
 
 const STAGE_LABELS: Record<string, string> = {
   DRAFT: 'Draft', ANALYZING: 'Analyzing manuscript', PLANNING: 'Planning scenes',
@@ -32,6 +33,15 @@ const STAGE_LABELS: Record<string, string> = {
 // window is assumed to still have an active poll loop somewhere (or is
 // safely resumable), and anything older is safe to treat as dead and retry.
 const SHOT_GENERATION_STALE_MS = 10 * 60 * 1000;
+/**
+ * Cap on how many times a scene may be blocked by pre-generation grounding
+ * validation before it is force-failed rather than retried indefinitely.
+ * This is separate from provider-error retryCount — a grounding failure
+ * means the scene spec itself is wrong (invented character/location), not
+ * that the provider hiccuped, so it needs a human to fix the scene, not
+ * more automatic attempts.
+ */
+const MAX_GROUNDING_VALIDATION_ATTEMPTS = 3;
 
 export const videoProjectService = {
   async create(userId: string, bookId: string, input: CreateVideoProjectInput = {}) {
@@ -288,6 +298,33 @@ export const videoProjectService = {
       visualPrompt: data.visualPrompt ?? scene.visualPrompt,
       negativePrompt: data.negativePrompt ?? scene.negativePrompt,
       cameraPlan: data.cameraPlan ?? scene.cameraPlan,
+    });
+  },
+  /**
+   * A human correcting the scene's characters/location/source text after
+   * a grounding-validation failure deserves a fresh set of validation
+   * attempts — otherwise a genuinely-fixed scene stays permanently
+   * force-failed from before the correction. This does not bypass
+   * validation, it only resets the attempt count so the corrected scene
+   * gets evaluated again.
+   */
+  async updateSceneGrounding(
+    userId: string,
+    sceneId: string,
+    data: { characters?: string[]; location?: string | null; sourceText?: string }
+  ) {
+    const scene = await videoSceneRepository.findByIdForUser(sceneId, userId);
+    if (!scene) throw AppError.notFound('Scene not found');
+    return prisma.videoScene.update({
+      where: { id: sceneId },
+      data: {
+        characters: data.characters ?? scene.characters,
+        location: data.location !== undefined ? data.location : scene.location,
+        sourceText: data.sourceText ?? scene.sourceText,
+        groundingValidationAttempts: 0,
+        status: 'PROMPT_READY',
+        errorMessage: null,
+      },
     });
   },
   async updateShotPrompt(userId: string, shotId: string, data: Record<string, unknown>) {
@@ -754,6 +791,58 @@ export const videoProjectService = {
     const project = scene.videoProject;
     if (project.status === 'CANCELED' || project.status === 'PAUSED') return;
 
+    // Hard gate: a scene must be traceable to actual book content before
+    // it is allowed to reach the (paid) video provider. This checks the
+    // scene's own characters/location against this project's book-derived
+    // character/location bibles and against the scene's own source text —
+    // it does not invent or assume anything, it only blocks scenes that
+    // fail that trace. A scene that keeps failing this after several
+    // attempts needs a human to fix the underlying scene spec, not more
+    // automatic retries, so it is force-failed rather than retried
+    // indefinitely.
+    const grounding = validateSceneGrounding(
+      { sourceText: scene.sourceText, characters: scene.characters, location: scene.location },
+      project.characters || [],
+      project.locations || []
+    );
+    if (!grounding.ok) {
+      const attempts = scene.groundingValidationAttempts ?? 0;
+      logger.warn('Scene failed pre-generation grounding validation', {
+        sceneId: scene.id, shotId, attempts, issues: grounding.issues,
+      });
+      if (attempts + 1 >= MAX_GROUNDING_VALIDATION_ATTEMPTS) {
+        await prisma.videoScene.update({
+          where: { id: scene.id },
+          data: {
+            status: 'FAILED',
+            groundingValidationAttempts: attempts + 1,
+            errorMessage: `Scene failed book-content validation after ${attempts + 1} attempts: ${grounding.issues.join(' ')}`,
+            lastErrorType: 'INVALID_PROMPT',
+          },
+        });
+        await prisma.videoShot.update({
+          where: { id: shotId },
+          data: {
+            status: 'FAILED',
+            errorMessage: `Blocked by pre-generation grounding validation: ${grounding.issues.join(' ')}`,
+            lastErrorType: 'INVALID_PROMPT',
+          },
+        });
+      } else {
+        await prisma.videoScene.update({
+          where: { id: scene.id },
+          data: {
+            status: 'NEEDS_REVIEW',
+            groundingValidationAttempts: attempts + 1,
+            errorMessage: `Scene needs review before generation: ${grounding.issues.join(' ')}`,
+          },
+        });
+      }
+      // Never send an ungrounded scene to the provider — no video is
+      // generated, no cost is incurred, regardless of attempt count.
+      return;
+    }
+
     const provider = getVideoProvider();
 
     // Idempotency guard: if this shot already has an in-flight provider
@@ -816,6 +905,10 @@ export const videoProjectService = {
             environment: refLoc.environment,
             architecture: refLoc.architecture,
             continuityNotes: refLoc.continuityNotes,
+            country: (refLoc as any).country,
+            city: (refLoc as any).city,
+            region: (refLoc as any).region,
+            culturalContext: (refLoc as any).culturalContext,
           }
         : null,
       durationSec: shot.durationSec,
