@@ -223,6 +223,12 @@ export const scenePlannerService = {
           locations[0]?.name ?? null
         );
       }
+      // Coverage validation sorts internally; persist in the same source
+      // order so an AI cannot retain complete coverage while reversing the
+      // visual narrative through its returned array order.
+      plan.scenes = [...plan.scenes]
+        .sort((a, b) => a.sourceStart - b.sourceStart)
+        .map((scene, index) => ({ ...scene, sceneNumber: index + 1 }));
       if (chapterId) await prisma.videoScene.deleteMany({ where: { chapterId: chapter.id, videoProjectId } });
       for (const proposal of plan.scenes) {
         const start = Math.max(0, Math.min(proposal.sourceStart, chapter.sourceText.length));

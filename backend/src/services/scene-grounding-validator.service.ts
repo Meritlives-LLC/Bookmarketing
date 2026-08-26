@@ -40,11 +40,11 @@ type EventMeaning = 'SUPPORTED' | 'CONTRADICTORY' | 'UNSUPPORTED';
 /**
  * Small, explicit semantic vocabulary for the high-impact event changes a
  * visual planner is likely to make. It is intentionally narrow: unknown
- * verbs still use the lexical evidence fallback below, rather than claiming
- * that a brittle parser understands arbitrary prose.
+ * verbs are rejected unless they are an exact source rendering. This is
+ * deliberately fail-closed: shared nouns cannot prove an invented action.
  */
 const EVENT_FAMILIES: Record<string, string[]> = {
-  ENTER: ['enter', 'entered', 'entering', 'walk into', 'walked into', 'go into', 'went into', 'arrive', 'arrived'],
+  ENTER: ['enter', 'entered', 'entering', 'walk into', 'walked into', 'walk inside', 'walked inside', 'go into', 'went into', 'go inside', 'went inside', 'arrive', 'arrived'],
   LEAVE: ['leave', 'left', 'exit', 'exited', 'walk out', 'walked out', 'depart', 'departed'],
   FLEE: ['flee', 'fled', 'escape', 'escaped', 'run away', 'ran away'],
   ATTACK: ['attack', 'attacked', 'fight', 'fought', 'strike', 'struck', 'assault'],
@@ -52,14 +52,42 @@ const EVENT_FAMILIES: Record<string, string[]> = {
   TAKE: ['take', 'took', 'steal', 'stole', 'grab', 'grabbed'],
   LOSE: ['lose', 'lost', 'drop', 'dropped', 'give away', 'gave away'],
   RECEIVE: ['receive', 'received', 'accept', 'accepted', 'get', 'got'],
+  TRANSFER: ['give', 'gave', 'hand', 'handed'],
+  PICK_UP: ['pick up', 'picked up', 'lifted'],
+  DISCOVER: ['discover', 'discovered', 'find', 'found'],
+  HIDE: ['hide', 'hid', 'conceal', 'concealed'],
+  WATCH: ['watch', 'watched', 'see', 'saw', 'observe', 'observed'],
+  APPROACH: ['approach', 'approached'],
+  OPEN_DOOR: ['open the door', 'opened the door', 'opens the door'],
   SIT: ['sit', 'sat', 'seated'],
 };
 const CONTRADICTORY_FAMILIES: Record<string, string[]> = {
-  ENTER: ['LEAVE'], LEAVE: ['ENTER'], FLEE: ['ATTACK', 'SIT'], ATTACK: ['FLEE'], TAKE: ['LOSE'], LOSE: ['TAKE', 'RECEIVE'], RECEIVE: ['LOSE'],
+  ENTER: ['LEAVE'], LEAVE: ['ENTER'], FLEE: ['ATTACK', 'SIT'], ATTACK: ['FLEE'], TAKE: ['LOSE'], LOSE: ['TAKE', 'RECEIVE'], RECEIVE: ['LOSE'], DISCOVER: ['HIDE'], HIDE: ['DISCOVER'],
 };
+const CINEMATIC_SUBACTIONS: Record<string, string[]> = { ENTER: ['APPROACH', 'OPEN_DOOR'] };
+const SEMANTIC_FILLERS = new Set(['inside', 'into', 'toward', 'towards', 'through', 'away', 'door', 'then', 'calmly', 'quickly']);
 function eventFamilies(text: string): string[] {
   const normalized = normalize(text);
   return Object.entries(EVENT_FAMILIES).filter(([, variants]) => variants.some((variant) => normalized.includes(variant))).map(([family]) => family);
+}
+function eventVocabulary(): Set<string> {
+  return new Set(Object.values(EVENT_FAMILIES).flatMap((variants) => variants.flatMap(words)));
+}
+function eventPayloadSupported(claim: string, source: string, ignored: string[]): boolean {
+  const ignoredWords = new Set([...ignored.flatMap(words), ...eventVocabulary(), ...SEMANTIC_FILLERS]);
+  const payload = words(claim).filter((word) => !ignoredWords.has(word));
+  const evidence = new Set(words(source));
+  return payload.every((word) => evidence.has(word));
+}
+function participantOrder(text: string, characters: GroundingCharacter[]): string[] {
+  return characters
+    .map((character) => ({ name: character.name, index: Math.min(...phrases(character).map((phrase) => normalize(text).indexOf(phrase)).filter((index) => index >= 0)) }))
+    .filter((entry) => Number.isFinite(entry.index))
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.name);
+}
+function relationshipTerms(text: string): string[] {
+  return ['sister', 'brother', 'wife', 'husband', 'mother', 'father', 'daughter', 'son'].filter((term) => new RegExp(`\\b${term}\\b`, 'i').test(text));
 }
 function validateEventMeaning(claim: string, source: string, ignored: string[]): EventMeaning {
   const sourceFamilies = eventFamilies(source);
@@ -68,9 +96,13 @@ function validateEventMeaning(claim: string, source: string, ignored: string[]):
   // A recognised visual action must be represented by the same semantic
   // family in the source. This catches shared-noun failures such as
   // "ran away from the burning house" -> "attacked the burning house".
-  if (claimFamilies.length && !claimFamilies.every((family) => sourceFamilies.includes(family))) return 'UNSUPPORTED';
-  if (claimFamilies.length) return 'SUPPORTED';
-  return evidenceSupports(claim, source, ignored) ? 'SUPPORTED' : 'UNSUPPORTED';
+  const supportedFamily = (family: string) => sourceFamilies.includes(family)
+    || sourceFamilies.some((sourceFamily) => (CINEMATIC_SUBACTIONS[sourceFamily] ?? []).includes(family));
+  if (claimFamilies.length && !claimFamilies.every(supportedFamily)) return 'UNSUPPORTED';
+  if (claimFamilies.length) return eventPayloadSupported(claim, source, ignored) ? 'SUPPORTED' : 'UNSUPPORTED';
+  // Exact source language is safe for deterministic/offline plans. Unknown
+  // paraphrases are not: lexical overlap alone is never proof of an event.
+  return normalize(claim) === normalize(source) ? 'SUPPORTED' : 'UNSUPPORTED';
 }
 
 export function canonicalCharacterName(value: string, knownCharacters: GroundingCharacter[]): string | null {
@@ -102,9 +134,20 @@ export function validateSceneGrounding(scene: SceneGroundingInput, knownCharacte
   }
   if (!scene.action?.trim()) issues.push('Scene has no structured action/event summary.');
   else {
-    const meaning = validateEventMeaning(scene.action, sourceText, [...knownCharacters.flatMap(phrases), scene.location ?? '']);
+    const ignored = [...knownCharacters.flatMap(phrases), scene.location ?? ''];
+    const meaning = validateEventMeaning(scene.action, sourceText, ignored);
     if (meaning === 'CONTRADICTORY') issues.push(`Action/event "${scene.action}" contradicts the source event in this scene excerpt.`);
     else if (meaning === 'UNSUPPORTED') issues.push(`Action/event "${scene.action}" is not supported by this scene's source excerpt.`);
+    const sourceParticipants = participantOrder(sourceText, knownCharacters);
+    const actionParticipants = participantOrder(scene.action, knownCharacters);
+    if (sourceParticipants.length >= 2 && actionParticipants.length >= 2 && sourceParticipants.join('|') !== actionParticipants.join('|')) {
+      issues.push(`Action/event "${scene.action}" reverses or changes the source participants' roles.`);
+    }
+    const sourceRelationships = relationshipTerms(sourceText);
+    const actionRelationships = relationshipTerms(scene.action);
+    if (actionRelationships.length && actionRelationships.some((term) => !sourceRelationships.includes(term))) {
+      issues.push(`Action/event "${scene.action}" changes a relationship stated by the source.`);
+    }
   }
   if (scene.emotionalBeat?.trim()) {
     const emotion = normalize(scene.emotionalBeat);

@@ -164,5 +164,35 @@ describe('validateSceneGrounding', () => {
       );
       expect(result.ok).toBe(false);
     });
+
+    it('fails invented unknown verbs that only share people and nouns', () => {
+      const david = [{ name: 'David' }];
+      const location = [{ name: 'the house' }];
+      expect(validateSceneGrounding(
+        { sourceText: 'David watched the fire from the house.', characters: ['David'], location: 'the house', action: 'David started the fire at the house' }, david, location
+      ).ok).toBe(false);
+      expect(validateSceneGrounding(
+        { sourceText: 'Peter discovered the body.', characters: ['Peter'], location: null, action: 'Peter hid the body' }, [{ name: 'Peter' }], []
+      ).ok).toBe(false);
+    });
+
+    it('preserves participant roles and important objects', () => {
+      const people = [{ name: 'John' }, { name: 'Peter' }];
+      expect(validateSceneGrounding(
+        { sourceText: 'John attacked Peter.', characters: ['John', 'Peter'], location: null, action: 'Peter attacked John' }, people, []
+      ).ok).toBe(false);
+      expect(validateSceneGrounding(
+        { sourceText: 'John picked up the knife.', characters: ['John'], location: null, action: 'John picked up the book' }, [{ name: 'John' }], []
+      ).ok).toBe(false);
+    });
+
+    it('allows source-supported cinematic sub-actions but rejects relationship changes', () => {
+      expect(validateSceneGrounding(
+        { sourceText: 'John entered the house.', characters: ['John'], location: 'the house', action: 'John approached the house' }, john, house
+      ).ok).toBe(true);
+      expect(validateSceneGrounding(
+        { sourceText: "John's sister Mary entered the room.", characters: ['John', 'Mary'], location: 'the room', action: "John's wife Mary entered the room" }, [{ name: 'John' }, { name: 'Mary' }], [{ name: 'the room' }]
+      ).ok).toBe(false);
+    });
   });
 });

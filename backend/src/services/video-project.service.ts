@@ -807,7 +807,9 @@ export const videoProjectService = {
         characters: scene.characters,
         location: scene.location,
         props: scene.props,
-        action: scene.action,
+        // A shot may stage a small, source-supported sub-action (approach,
+        // opening a door) but may never replace its parent event.
+        action: shot.action ?? scene.action,
         emotionalBeat: scene.emotionalBeat,
       },
       project.characters || [],
@@ -942,10 +944,11 @@ export const videoProjectService = {
         durationSec: shot.durationSec,
       },
     });
-    // Prefer user-stored prompt if it already includes compiled cinematography
-    const prompt = shot.visualPrompt?.includes('Cinematography:')
-      ? shot.visualPrompt
-      : compiled.prompt;
+    // The final provider prompt is always rebuilt from the grounded source
+    // segment and canonical continuity state. A stored AI shot prompt can be
+    // useful for editing/display, but must not bypass the evidence gate and
+    // introduce a new action after validation.
+    const prompt = compiled.prompt;
 
     // Advisory continuity check — NEVER blocks generation
     try {
