@@ -17,7 +17,7 @@ import { shotPromptCompilerService } from './shot-prompt-compiler.service';
 import { ffmpegAssemblyService } from './ffmpeg-assembly.service';
 import { storageService } from './storage.service';
 import { secureDownloadToBuffer, GOOGLE_PROVIDER_HOSTS } from '../utils/secure-remote-fetch';
-import { validateSceneGrounding } from './scene-grounding-validator.service';
+import { selectGroundedShotSource, validateSceneGrounding } from './scene-grounding-validator.service';
 
 const STAGE_LABELS: Record<string, string> = {
   DRAFT: 'Draft', ANALYZING: 'Analyzing manuscript', PLANNING: 'Planning scenes',
@@ -574,7 +574,7 @@ export const videoProjectService = {
     });
 
     const compiled = shotPromptCompilerService.compile({
-      sourceTextSegment: shot.sourceTextSegment || scene.sourceText,
+      sourceTextSegment: selectGroundedShotSource(scene.sourceText, shot.sourceTextSegment),
       filmStyle: scene.videoProject.visualStyle || undefined,
       durationSec: shot.durationSec,
       shot: {
@@ -898,7 +898,7 @@ export const videoProjectService = {
     ].filter(Boolean) as string[];
 
     const compiled = shotPromptCompilerService.compile({
-      sourceTextSegment: shot.sourceTextSegment || scene.sourceText,
+      sourceTextSegment: selectGroundedShotSource(scene.sourceText, shot.sourceTextSegment),
       visualPrompt: shot.visualPrompt,
       negativePrompt: shot.negativePrompt || scene.negativePrompt,
       filmStyle: project.visualStyle || undefined,

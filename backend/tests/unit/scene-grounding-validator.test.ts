@@ -1,4 +1,4 @@
-import { validateSceneGrounding } from '../../src/services/scene-grounding-validator.service';
+import { selectGroundedShotSource, validateSceneGrounding } from '../../src/services/scene-grounding-validator.service';
 
 describe('validateSceneGrounding', () => {
   const knownCharacters = [{ name: 'Adaeze Okafor', aliases: ['Ada'] }, { name: 'Baba Tunde', aliases: ['Uncle Tunde'] }];
@@ -194,5 +194,13 @@ describe('validateSceneGrounding', () => {
         { sourceText: "John's sister Mary entered the room.", characters: ['John', 'Mary'], location: 'the room', action: "John's wife Mary entered the room" }, [{ name: 'John' }, { name: 'Mary' }], [{ name: 'the room' }]
       ).ok).toBe(false);
     });
+  });
+});
+
+describe('selectGroundedShotSource', () => {
+  it('keeps a real shot excerpt but replaces an invented provider-prompt segment with scene evidence', () => {
+    const source = 'John entered the house and found Mary by the window.';
+    expect(selectGroundedShotSource(source, 'found Mary by the window')).toBe('found Mary by the window');
+    expect(selectGroundedShotSource(source, 'John attacked Mary with a knife.')).toBe(source);
   });
 });

@@ -18,6 +18,12 @@ const STOP_WORDS = new Set(['a','an','and','are','as','at','be','by','for','from
 const EMOTION_OPPOSITES: Record<string, string[]> = { joyful: ['grief','grieving','sad','sorrow','afraid'], happy: ['grief','sad','afraid'], calm: ['panic','afraid','angry','furious'], peaceful: ['panic','violence','afraid'], angry: ['calm','peaceful','joyful'], afraid: ['calm','fearless','joyful'] };
 function normalize(s: string): string { return s.toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, ' ').replace(/\s+/g, ' ').trim(); }
 function words(s: string): string[] { return normalize(s).split(' ').map((word) => word.replace(/(ing|ed|es|s)$/u, '')).filter((word) => word.length > 2 && !STOP_WORDS.has(word)); }
+export function selectGroundedShotSource(sceneSource: string | null | undefined, shotSource: string | null | undefined): string {
+  const source = sceneSource?.trim() ?? '';
+  const candidate = shotSource?.trim() ?? '';
+  if (!candidate || !source) return source;
+  return normalize(source).includes(normalize(candidate)) ? candidate : source;
+}
 function phrases(character: GroundingCharacter): string[] { return [character.name, ...(character.aliases ?? [])].map(normalize).filter(Boolean); }
 function phraseAppears(character: GroundingCharacter, text: string): boolean { const haystack = ` ${normalize(text)} `; return phrases(character).some((phrase) => haystack.includes(` ${phrase} `)); }
 
