@@ -64,9 +64,15 @@ export const config = {
   isProduction: process.env.NODE_ENV === 'production',
   isTest: process.env.NODE_ENV === 'test',
 
-    port: parseInt(process.env.PORT ?? '4000', 10),
-    host: process.env.BIND_HOST ?? '0.0.0.0',
-    apiPrefix: '/api/v1',
+  port: parseInt(process.env.PORT ?? '4000', 10),
+  // Defaults to all interfaces (correct for standalone/two-service
+  // deployments — see backend/Dockerfile, docker-compose.yml). The
+  // single-service Render deploy (root package.json's start:web) explicitly
+  // sets this to 127.0.0.1: with both processes sharing one container,
+  // loopback keeps the backend reachable to the frontend's proxy while
+  // making it invisible outside the container.
+  host: process.env.BIND_HOST ?? '0.0.0.0',
+  apiPrefix: '/api/v1',
 
   timezone: process.env.TZ ?? 'Africa/Lagos',
 

@@ -7,7 +7,7 @@
   "scripts": {
     "build": "npm install && npm ci --prefix backend && npm run build --prefix backend && npm ci --prefix frontend && npm run build --prefix frontend",
     "start": "npm run start:web",
-    "start:web": "npm run prisma:migrate:deploy --prefix backend && npm run prisma:seed --prefix backend && concurrently -k -n backend,frontend \"PORT=4001 BIND_HOST=127.0.0.1 npm run start:app --prefix backend\" \"PORT=$PORT BACKEND_INTERNAL_URL=http://127.0.0.1:4001 npm run start --prefix frontend\"",
+    "start:web": "npm run prisma:migrate:deploy --prefix backend && npm run prisma:seed --prefix backend && concurrently -k -n backend,frontend \"PORT=4001 BIND_HOST=127.0.0.1 npm run start:app --prefix backend\" \"PORT=$PORT HOSTNAME=0.0.0.0 BACKEND_INTERNAL_URL=http://127.0.0.1:4001 npm run start --prefix frontend\"",
     "start:worker:audit": "npm run start:worker:audit --prefix backend",
     "start:worker:ai": "npm run start:worker:ai --prefix backend",
     "start:worker:book-video": "npm run start:worker:book-video --prefix backend",
