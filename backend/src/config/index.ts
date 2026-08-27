@@ -64,8 +64,9 @@ export const config = {
   isProduction: process.env.NODE_ENV === 'production',
   isTest: process.env.NODE_ENV === 'test',
 
-  port: parseInt(process.env.PORT ?? '4000', 10),
-  apiPrefix: '/api/v1',
+    port: parseInt(process.env.PORT ?? '4000', 10),
+    host: process.env.BIND_HOST ?? '0.0.0.0',
+    apiPrefix: '/api/v1',
 
   timezone: process.env.TZ ?? 'Africa/Lagos',
 
