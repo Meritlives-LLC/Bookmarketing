@@ -46,7 +46,7 @@ const nextConfig = {
   },
 
   async rewrites() {
-    const backend = process.env.BACKEND_INTERNAL_URL || "http://localhost:4001";
+    const backend = process.env.BACKEND_INTERNAL_URL || "http://127.0.0.1:4001";
     return [
       { source: "/api/:path*", destination: `${backend}/api/:path*` },
     ];

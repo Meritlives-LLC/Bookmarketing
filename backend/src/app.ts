@@ -58,8 +58,8 @@ async function bootstrap() {
   }
   const app = createApp();
 
-  const server = app.listen(config.port, () => {
-    logger.info(`BookMarketingOS API listening on port ${config.port} [${config.env}]`);
+  const server = app.listen(config.port, config.host, () => {
+    logger.info(`BookMarketingOS API listening on ${config.host}:${config.port} [${config.env}]`);
   });
 
   const shutdown = async (signal: string) => {
