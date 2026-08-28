@@ -279,3 +279,52 @@ export interface AuthTokens {
   accessToken: string;
   refreshToken: string;
 }
+
+export interface PaginationMeta {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export interface AdminStats {
+  userCount: number;
+  bookCount: number;
+  auditCount: number;
+  creativeCount: number;
+  newUsersLast7d: number;
+  subscriptionsByPlan: { plan: SubscriptionPlan; count: number }[];
+  usersByRole: { role: UserRole; count: number }[];
+}
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: UserRole;
+  credits: number;
+  emailVerified: boolean;
+  createdAt: string;
+  lastLoginAt?: string | null;
+  subscription?: { plan: SubscriptionPlan; status: string } | null;
+  _count: { books: number };
+}
+
+export interface AdminBook {
+  id: string;
+  title: string;
+  genre: BookGenre;
+  createdAt: string;
+  user: { id: string; email: string; firstName: string; lastName: string };
+  _count: { audits: number; creatives: number };
+}
+
+export interface AdminAudit {
+  id: string;
+  status: AuditStatus;
+  requestedAt: string;
+  completedAt?: string | null;
+  errorMessage?: string | null;
+  book: { id: string; title: string; user: { email: string } };
+}

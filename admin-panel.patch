@@ -1,0 +1,1459 @@
+diff --git a/backend/src/controllers/admin.controller.ts b/backend/src/controllers/admin.controller.ts
+new file mode 100644
+index 0000000..d5027bb
+--- /dev/null
++++ b/backend/src/controllers/admin.controller.ts
+@@ -0,0 +1,83 @@
++import { Request, Response, NextFunction } from 'express';
++import { AuditStatus } from '@prisma/client';
++import { adminService } from '../services/admin.service';
++
++export const adminController = {
++  async stats(_req: Request, res: Response, next: NextFunction) {
++    try {
++      const stats = await adminService.stats();
++      res.json({ success: true, data: stats });
++    } catch (error) {
++      next(error);
++    }
++  },
++
++  async listUsers(req: Request, res: Response, next: NextFunction) {
++    try {
++      const { page, limit, search } = req.query as {
++        page?: number;
++        limit?: number;
++        search?: string;
++      };
++      const result = await adminService.listUsers(search, page || 1, limit || 20);
++      res.json({ success: true, data: result.users, meta: result.meta });
++    } catch (error) {
++      next(error);
++    }
++  },
++
++  async updateUser(req: Request, res: Response, next: NextFunction) {
++    try {
++      const user = await adminService.updateUser(req.user!, req.params.id, req.body);
++      res.json({ success: true, data: user });
++    } catch (error) {
++      next(error);
++    }
++  },
++
++  async deleteUser(req: Request, res: Response, next: NextFunction) {
++    try {
++      await adminService.deleteUser(req.user!.id, req.params.id);
++      res.status(204).send();
++    } catch (error) {
++      next(error);
++    }
++  },
++
++  async listBooks(req: Request, res: Response, next: NextFunction) {
++    try {
++      const { page, limit, search } = req.query as {
++        page?: number;
++        limit?: number;
++        search?: string;
++      };
++      const result = await adminService.listBooks(search, page || 1, limit || 20);
++      res.json({ success: true, data: result.books, meta: result.meta });
++    } catch (error) {
++      next(error);
++    }
++  },
++
++  async deleteBook(req: Request, res: Response, next: NextFunction) {
++    try {
++      await adminService.deleteBook(req.params.id);
++      res.status(204).send();
++    } catch (error) {
++      next(error);
++    }
++  },
++
++  async listAudits(req: Request, res: Response, next: NextFunction) {
++    try {
++      const { page, limit, status } = req.query as {
++        page?: number;
++        limit?: number;
++        status?: AuditStatus;
++      };
++      const result = await adminService.listAudits(status, page || 1, limit || 20);
++      res.json({ success: true, data: result.audits, meta: result.meta });
++    } catch (error) {
++      next(error);
++    }
++  },
++};
+diff --git a/backend/src/repositories/admin.repository.ts b/backend/src/repositories/admin.repository.ts
+new file mode 100644
+index 0000000..1f83963
+--- /dev/null
++++ b/backend/src/repositories/admin.repository.ts
+@@ -0,0 +1,140 @@
++import { Prisma, UserRole, AuditStatus } from '@prisma/client';
++import { prisma } from '../config/database';
++
++export const adminRepository = {
++  async stats() {
++    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
++
++    const [userCount, bookCount, auditCount, creativeCount, newUsersLast7d, byPlan, byRole] =
++      await Promise.all([
++        prisma.user.count(),
++        prisma.book.count(),
++        prisma.audit.count(),
++        prisma.creative.count(),
++        prisma.user.count({ where: { createdAt: { gte: sevenDaysAgo } } }),
++        prisma.subscription.groupBy({ by: ['plan'], _count: { _all: true } }),
++        prisma.user.groupBy({ by: ['role'], _count: { _all: true } }),
++      ]);
++
++    return { userCount, bookCount, auditCount, creativeCount, newUsersLast7d, byPlan, byRole };
++  },
++
++  findUsers(search: string | undefined, skip: number, take: number) {
++    const where: Prisma.UserWhereInput = search
++      ? {
++          OR: [
++            { email: { contains: search, mode: 'insensitive' } },
++            { firstName: { contains: search, mode: 'insensitive' } },
++            { lastName: { contains: search, mode: 'insensitive' } },
++          ],
++        }
++      : {};
++
++    return Promise.all([
++      prisma.user.findMany({
++        where,
++        skip,
++        take,
++        orderBy: { createdAt: 'desc' },
++        select: {
++          id: true,
++          email: true,
++          firstName: true,
++          lastName: true,
++          role: true,
++          credits: true,
++          emailVerified: true,
++          createdAt: true,
++          lastLoginAt: true,
++          subscription: { select: { plan: true, status: true } },
++          _count: { select: { books: true } },
++        },
++      }),
++      prisma.user.count({ where }),
++    ]);
++  },
++
++  findUserById(id: string) {
++    return prisma.user.findUnique({ where: { id } });
++  },
++
++  updateUser(id: string, data: { role?: UserRole; credits?: number }) {
++    return prisma.user.update({
++      where: { id },
++      data,
++      select: {
++        id: true,
++        email: true,
++        firstName: true,
++        lastName: true,
++        role: true,
++        credits: true,
++      },
++    });
++  },
++
++  deleteUser(id: string) {
++    return prisma.user.delete({ where: { id } });
++  },
++
++  findBooks(search: string | undefined, skip: number, take: number) {
++    const where: Prisma.BookWhereInput = search
++      ? {
++          OR: [
++            { title: { contains: search, mode: 'insensitive' } },
++            { user: { email: { contains: search, mode: 'insensitive' } } },
++          ],
++        }
++      : {};
++
++    return Promise.all([
++      prisma.book.findMany({
++        where,
++        skip,
++        take,
++        orderBy: { createdAt: 'desc' },
++        select: {
++          id: true,
++          title: true,
++          genre: true,
++          createdAt: true,
++          user: { select: { id: true, email: true, firstName: true, lastName: true } },
++          _count: { select: { audits: true, creatives: true } },
++        },
++      }),
++      prisma.book.count({ where }),
++    ]);
++  },
++
++  findBookById(id: string) {
++    return prisma.book.findUnique({ where: { id } });
++  },
++
++  deleteBook(id: string) {
++    return prisma.book.delete({ where: { id } });
++  },
++
++  findAudits(status: AuditStatus | undefined, skip: number, take: number) {
++    const where: Prisma.AuditWhereInput = status ? { status } : {};
++
++    return Promise.all([
++      prisma.audit.findMany({
++        where,
++        skip,
++        take,
++        orderBy: { requestedAt: 'desc' },
++        select: {
++          id: true,
++          status: true,
++          requestedAt: true,
++          completedAt: true,
++          errorMessage: true,
++          book: {
++            select: { id: true, title: true, user: { select: { email: true } } },
++          },
++        },
++      }),
++      prisma.audit.count({ where }),
++    ]);
++  },
++};
+diff --git a/backend/src/routes/v1/admin.routes.ts b/backend/src/routes/v1/admin.routes.ts
+new file mode 100644
+index 0000000..d9190a2
+--- /dev/null
++++ b/backend/src/routes/v1/admin.routes.ts
+@@ -0,0 +1,27 @@
++import { Router } from 'express';
++import { adminController } from '../../controllers/admin.controller';
++import { authenticate, requireRole } from '../../middleware/auth.middleware';
++import { validate } from '../../middleware/validation.middleware';
++import {
++  updateUserByAdminSchema,
++  adminListQuerySchema,
++  adminAuditListQuerySchema,
++} from '../../validators/admin.validator';
++
++const router = Router();
++
++// Every route below is admin-only.
++router.use(authenticate, requireRole('ADMIN', 'SUPER_ADMIN'));
++
++router.get('/stats', adminController.stats);
++
++router.get('/users', validate(adminListQuerySchema, 'query'), adminController.listUsers);
++router.patch('/users/:id', validate(updateUserByAdminSchema), adminController.updateUser);
++router.delete('/users/:id', adminController.deleteUser);
++
++router.get('/books', validate(adminListQuerySchema, 'query'), adminController.listBooks);
++router.delete('/books/:id', adminController.deleteBook);
++
++router.get('/audits', validate(adminAuditListQuerySchema, 'query'), adminController.listAudits);
++
++export default router;
+diff --git a/backend/src/routes/v1/index.ts b/backend/src/routes/v1/index.ts
+index d6ebcc1..137bc99 100644
+--- a/backend/src/routes/v1/index.ts
++++ b/backend/src/routes/v1/index.ts
+@@ -10,6 +10,7 @@ import analyticsRoutes from './analytics.routes';
+ import userRoutes from './user.routes';
+ import billingRoutes from './billing.routes';
+ import apiKeysRoutes from './apikeys.routes';
++import adminRoutes from './admin.routes';
+ 
+ const router = Router();
+ router.use('/auth', authRoutes);
+@@ -24,4 +25,5 @@ router.use('/analytics', analyticsRoutes);
+ router.use('/user', userRoutes);
+ router.use('/billing', billingRoutes);
+ router.use('/api-keys', apiKeysRoutes);
++router.use('/admin', adminRoutes);
+ export default router;
+diff --git a/backend/src/services/admin.service.ts b/backend/src/services/admin.service.ts
+new file mode 100644
+index 0000000..bbd2440
+--- /dev/null
++++ b/backend/src/services/admin.service.ts
+@@ -0,0 +1,91 @@
++import { UserRole, AuditStatus } from '@prisma/client';
++import { adminRepository } from '../repositories/admin.repository';
++import { AppError } from '../utils/helpers';
++import { paginate, buildPaginationMeta } from '../utils/formatter';
++
++export const adminService = {
++  async stats() {
++    const { userCount, bookCount, auditCount, creativeCount, newUsersLast7d, byPlan, byRole } =
++      await adminRepository.stats();
++
++    return {
++      userCount,
++      bookCount,
++      auditCount,
++      creativeCount,
++      newUsersLast7d,
++      subscriptionsByPlan: byPlan.map((p) => ({ plan: p.plan, count: p._count._all })),
++      usersByRole: byRole.map((r) => ({ role: r.role, count: r._count._all })),
++    };
++  },
++
++  async listUsers(search: string | undefined, page: number, limit: number) {
++    const { skip, take } = paginate(page, limit);
++    const [users, total] = await adminRepository.findUsers(search, skip, take);
++    return { users, meta: buildPaginationMeta(total, page ?? 1, take) };
++  },
++
++  async updateUser(
++    actingAdmin: { id: string; role: UserRole },
++    targetId: string,
++    input: { role?: UserRole; credits?: number }
++  ) {
++    if (input.role !== undefined) {
++      if (targetId === actingAdmin.id) {
++        throw AppError.badRequest("You can't change your own role", 'CANNOT_MODIFY_SELF');
++      }
++      if (input.role === 'SUPER_ADMIN' && actingAdmin.role !== 'SUPER_ADMIN') {
++        throw AppError.forbidden('Only a super admin can grant super admin access');
++      }
++    }
++
++    const existing = await adminRepository.findUserById(targetId);
++    if (!existing) {
++      throw AppError.notFound('User not found');
++    }
++
++    // A regular admin demoting/editing another admin's role is reserved for super admins.
++    if (
++      input.role !== undefined &&
++      existing.role !== 'AUTHOR' &&
++      actingAdmin.role !== 'SUPER_ADMIN'
++    ) {
++      throw AppError.forbidden('Only a super admin can change another admin\u2019s role');
++    }
++
++    return adminRepository.updateUser(targetId, input);
++  },
++
++  async deleteUser(actingAdminId: string, targetId: string) {
++    if (targetId === actingAdminId) {
++      throw AppError.badRequest("You can't delete your own account", 'CANNOT_MODIFY_SELF');
++    }
++
++    const existing = await adminRepository.findUserById(targetId);
++    if (!existing) {
++      throw AppError.notFound('User not found');
++    }
++
++    await adminRepository.deleteUser(targetId);
++  },
++
++  async listBooks(search: string | undefined, page: number, limit: number) {
++    const { skip, take } = paginate(page, limit);
++    const [books, total] = await adminRepository.findBooks(search, skip, take);
++    return { books, meta: buildPaginationMeta(total, page ?? 1, take) };
++  },
++
++  async deleteBook(id: string) {
++    const existing = await adminRepository.findBookById(id);
++    if (!existing) {
++      throw AppError.notFound('Book not found');
++    }
++    await adminRepository.deleteBook(id);
++  },
++
++  async listAudits(status: AuditStatus | undefined, page: number, limit: number) {
++    const { skip, take } = paginate(page, limit);
++    const [audits, total] = await adminRepository.findAudits(status, skip, take);
++    return { audits, meta: buildPaginationMeta(total, page ?? 1, take) };
++  },
++};
+diff --git a/backend/src/validators/admin.validator.ts b/backend/src/validators/admin.validator.ts
+new file mode 100644
+index 0000000..f214959
+--- /dev/null
++++ b/backend/src/validators/admin.validator.ts
+@@ -0,0 +1,22 @@
++import { z } from 'zod';
++
++export const updateUserByAdminSchema = z
++  .object({
++    role: z.enum(['AUTHOR', 'ADMIN', 'SUPER_ADMIN']).optional(),
++    credits: z.coerce.number().int().min(0).max(100_000).optional(),
++  })
++  .refine((data) => data.role !== undefined || data.credits !== undefined, {
++    message: 'Provide at least role or credits',
++  });
++
++export const adminListQuerySchema = z.object({
++  page: z.coerce.number().int().min(1).optional(),
++  limit: z.coerce.number().int().min(1).max(100).optional(),
++  search: z.string().trim().max(200).optional(),
++});
++
++export const adminAuditListQuerySchema = z.object({
++  page: z.coerce.number().int().min(1).optional(),
++  limit: z.coerce.number().int().min(1).max(100).optional(),
++  status: z.enum(['PENDING', 'SCRAPING', 'ANALYZING', 'COMPLETED', 'FAILED']).optional(),
++});
+diff --git a/frontend/app/(dashboard)/admin/audits/page.tsx b/frontend/app/(dashboard)/admin/audits/page.tsx
+new file mode 100644
+index 0000000..3831d38
+--- /dev/null
++++ b/frontend/app/(dashboard)/admin/audits/page.tsx
+@@ -0,0 +1,200 @@
++"use client";
++
++import { useEffect, useRef, useState } from "react";
++import Link from "next/link";
++import { ArrowLeft, Loader2, ScanSearch } from "lucide-react";
++import { AdminGuard } from "@/components/shared/AdminGuard";
++import { Card, CardContent } from "@/components/ui/card";
++import { Select } from "@/components/ui/select";
++import { Badge } from "@/components/ui/badge";
++import { Button } from "@/components/ui/button";
++import {
++  Table,
++  TableHeader,
++  TableBody,
++  TableRow,
++  TableHead,
++  TableCell,
++} from "@/components/ui/table";
++import { EmptyState } from "@/components/shared/EmptyState";
++import { apiGetWithMeta } from "@/lib/api/client";
++import { formatRelative } from "@/lib/utils";
++import type { AdminAudit, AuditStatus, PaginationMeta } from "@/types";
++
++const PAGE_SIZE = 20;
++const STATUSES: AuditStatus[] = ["PENDING", "SCRAPING", "ANALYZING", "COMPLETED", "FAILED"];
++
++function StatusBadge({ status }: { status: AuditStatus }) {
++  if (status === "COMPLETED") return <Badge variant="success">COMPLETED</Badge>;
++  if (status === "FAILED") return <Badge variant="destructive">FAILED</Badge>;
++  return <Badge variant="secondary">{status}</Badge>;
++}
++
++function AdminAuditsView() {
++  const [audits, setAudits] = useState<AdminAudit[]>([]);
++  const [meta, setMeta] = useState<PaginationMeta | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const [status, setStatus] = useState<AuditStatus | "">("");
++  const [page, setPage] = useState(1);
++  const requestIdRef = useRef(0);
++
++  function load(nextPage: number, nextStatus: AuditStatus | "") {
++    const requestId = ++requestIdRef.current;
++    setLoading(true);
++    const params = new URLSearchParams({ page: String(nextPage), limit: String(PAGE_SIZE) });
++    if (nextStatus) params.set("status", nextStatus);
++    apiGetWithMeta<AdminAudit[], PaginationMeta>(`/admin/audits?${params.toString()}`)
++      .then(({ data, meta: m }) => {
++        if (requestId !== requestIdRef.current) return;
++        setAudits(data);
++        setMeta(m);
++        setError("");
++      })
++      .catch((e) => {
++        if (requestId === requestIdRef.current) {
++          setError(e instanceof Error ? e.message : "Failed to load audits");
++        }
++      })
++      .finally(() => {
++        if (requestId === requestIdRef.current) setLoading(false);
++      });
++  }
++
++  useEffect(() => {
++    setPage(1);
++    load(1, status);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [status]);
++
++  const totalPages = meta?.totalPages ?? 1;
++
++  return (
++    <div className="mx-auto max-w-6xl space-y-6 animate-fade-in">
++      <div>
++        <Link
++          href="/admin"
++          className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
++        >
++          <ArrowLeft className="h-3.5 w-3.5" /> Admin
++        </Link>
++        <h1 className="text-2xl font-bold tracking-tight">Audience audits</h1>
++        <p className="text-muted-foreground">{meta ? `${meta.total} total` : "Loading…"}</p>
++      </div>
++
++      <Select
++        className="max-w-xs"
++        value={status}
++        onChange={(e) => setStatus(e.target.value as AuditStatus | "")}
++      >
++        <option value="">All statuses</option>
++        {STATUSES.map((s) => (
++          <option key={s} value={s}>
++            {s}
++          </option>
++        ))}
++      </Select>
++
++      {error && (
++        <Card className="border-destructive/30 bg-destructive/5">
++          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
++        </Card>
++      )}
++
++      <Card>
++        <CardContent className="p-0">
++          {loading && (
++            <div className="flex justify-center py-16">
++              <Loader2 className="h-6 w-6 animate-spin text-primary" />
++            </div>
++          )}
++
++          {!loading && audits.length === 0 && (
++            <EmptyState
++              icon={ScanSearch}
++              title="No audits found"
++              description="Try a different status filter."
++            />
++          )}
++
++          {!loading && audits.length > 0 && (
++            <Table>
++              <TableHeader>
++                <TableRow>
++                  <TableHead>Book</TableHead>
++                  <TableHead>Author</TableHead>
++                  <TableHead>Status</TableHead>
++                  <TableHead>Requested</TableHead>
++                  <TableHead>Completed</TableHead>
++                  <TableHead>Error</TableHead>
++                </TableRow>
++              </TableHeader>
++              <TableBody>
++                {audits.map((a) => (
++                  <TableRow key={a.id}>
++                    <TableCell className="font-medium">{a.book.title}</TableCell>
++                    <TableCell className="text-sm text-muted-foreground">
++                      {a.book.user.email}
++                    </TableCell>
++                    <TableCell>
++                      <StatusBadge status={a.status} />
++                    </TableCell>
++                    <TableCell className="text-xs text-muted-foreground">
++                      {formatRelative(a.requestedAt)}
++                    </TableCell>
++                    <TableCell className="text-xs text-muted-foreground">
++                      {a.completedAt ? formatRelative(a.completedAt) : "—"}
++                    </TableCell>
++                    <TableCell className="max-w-xs truncate text-xs text-destructive">
++                      {a.errorMessage ?? ""}
++                    </TableCell>
++                  </TableRow>
++                ))}
++              </TableBody>
++            </Table>
++          )}
++        </CardContent>
++      </Card>
++
++      {totalPages > 1 && (
++        <div className="flex items-center justify-center gap-3">
++          <Button
++            size="sm"
++            variant="outline"
++            disabled={page <= 1 || loading}
++            onClick={() => {
++              const next = page - 1;
++              setPage(next);
++              load(next, status);
++            }}
++          >
++            Previous
++          </Button>
++          <span className="text-sm text-muted-foreground">
++            Page {page} of {totalPages}
++          </span>
++          <Button
++            size="sm"
++            variant="outline"
++            disabled={page >= totalPages || loading}
++            onClick={() => {
++              const next = page + 1;
++              setPage(next);
++              load(next, status);
++            }}
++          >
++            Next
++          </Button>
++        </div>
++      )}
++    </div>
++  );
++}
++
++export default function AdminAuditsPage() {
++  return (
++    <AdminGuard>
++      <AdminAuditsView />
++    </AdminGuard>
++  );
++}
+diff --git a/frontend/app/(dashboard)/admin/books/page.tsx b/frontend/app/(dashboard)/admin/books/page.tsx
+new file mode 100644
+index 0000000..aafe600
+--- /dev/null
++++ b/frontend/app/(dashboard)/admin/books/page.tsx
+@@ -0,0 +1,215 @@
++"use client";
++
++import { useEffect, useRef, useState } from "react";
++import Link from "next/link";
++import { ArrowLeft, BookOpen, Loader2, Trash2 } from "lucide-react";
++import { AdminGuard } from "@/components/shared/AdminGuard";
++import { Card, CardContent } from "@/components/ui/card";
++import { Input } from "@/components/ui/input";
++import { Button } from "@/components/ui/button";
++import {
++  Table,
++  TableHeader,
++  TableBody,
++  TableRow,
++  TableHead,
++  TableCell,
++} from "@/components/ui/table";
++import { EmptyState } from "@/components/shared/EmptyState";
++import { apiGetWithMeta, api, ApiError } from "@/lib/api/client";
++import { formatRelative } from "@/lib/utils";
++import type { AdminBook, PaginationMeta } from "@/types";
++
++const PAGE_SIZE = 20;
++
++function AdminBooksView() {
++  const [books, setBooks] = useState<AdminBook[]>([]);
++  const [meta, setMeta] = useState<PaginationMeta | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const [search, setSearch] = useState("");
++  const [page, setPage] = useState(1);
++  const [deletingId, setDeletingId] = useState<string | null>(null);
++  const requestIdRef = useRef(0);
++
++  function load(nextPage: number, nextSearch: string) {
++    const requestId = ++requestIdRef.current;
++    setLoading(true);
++    const params = new URLSearchParams({ page: String(nextPage), limit: String(PAGE_SIZE) });
++    if (nextSearch) params.set("search", nextSearch);
++    apiGetWithMeta<AdminBook[], PaginationMeta>(`/admin/books?${params.toString()}`)
++      .then(({ data, meta: m }) => {
++        if (requestId !== requestIdRef.current) return;
++        setBooks(data);
++        setMeta(m);
++        setError("");
++      })
++      .catch((e) => {
++        if (requestId === requestIdRef.current) {
++          setError(e instanceof Error ? e.message : "Failed to load books");
++        }
++      })
++      .finally(() => {
++        if (requestId === requestIdRef.current) setLoading(false);
++      });
++  }
++
++  useEffect(() => {
++    const timer = setTimeout(() => {
++      setPage(1);
++      load(1, search);
++    }, search ? 300 : 0);
++    return () => clearTimeout(timer);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [search]);
++
++  async function handleDelete(book: AdminBook) {
++    if (
++      !confirm(
++        `Delete "${book.title}" (${book.user.email}) and all its audits/creatives? This cannot be undone.`
++      )
++    ) {
++      return;
++    }
++    setDeletingId(book.id);
++    try {
++      await api.delete(`/admin/books/${book.id}`);
++      setBooks((prev) => prev.filter((b) => b.id !== book.id));
++      setMeta((prev) => (prev ? { ...prev, total: prev.total - 1 } : prev));
++    } catch (e) {
++      setError(e instanceof ApiError ? e.message : "Failed to delete book");
++    } finally {
++      setDeletingId(null);
++    }
++  }
++
++  const totalPages = meta?.totalPages ?? 1;
++
++  return (
++    <div className="mx-auto max-w-6xl space-y-6 animate-fade-in">
++      <div>
++        <Link
++          href="/admin"
++          className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
++        >
++          <ArrowLeft className="h-3.5 w-3.5" /> Admin
++        </Link>
++        <h1 className="text-2xl font-bold tracking-tight">Books</h1>
++        <p className="text-muted-foreground">{meta ? `${meta.total} total` : "Loading…"}</p>
++      </div>
++
++      <Input
++        placeholder="Search by title or author email…"
++        value={search}
++        onChange={(e) => setSearch(e.target.value)}
++        className="max-w-sm"
++      />
++
++      {error && (
++        <Card className="border-destructive/30 bg-destructive/5">
++          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
++        </Card>
++      )}
++
++      <Card>
++        <CardContent className="p-0">
++          {loading && (
++            <div className="flex justify-center py-16">
++              <Loader2 className="h-6 w-6 animate-spin text-primary" />
++            </div>
++          )}
++
++          {!loading && books.length === 0 && (
++            <EmptyState icon={BookOpen} title="No books found" description="Try a different search." />
++          )}
++
++          {!loading && books.length > 0 && (
++            <Table>
++              <TableHeader>
++                <TableRow>
++                  <TableHead>Title</TableHead>
++                  <TableHead>Author</TableHead>
++                  <TableHead>Genre</TableHead>
++                  <TableHead>Audits</TableHead>
++                  <TableHead>Creatives</TableHead>
++                  <TableHead>Created</TableHead>
++                  <TableHead className="text-right">Actions</TableHead>
++                </TableRow>
++              </TableHeader>
++              <TableBody>
++                {books.map((b) => (
++                  <TableRow key={b.id}>
++                    <TableCell className="font-medium">{b.title}</TableCell>
++                    <TableCell>
++                      <p className="text-sm">
++                        {b.user.firstName} {b.user.lastName}
++                      </p>
++                      <p className="text-xs text-muted-foreground">{b.user.email}</p>
++                    </TableCell>
++                    <TableCell className="text-sm">{b.genre}</TableCell>
++                    <TableCell className="text-sm">{b._count.audits}</TableCell>
++                    <TableCell className="text-sm">{b._count.creatives}</TableCell>
++                    <TableCell className="text-xs text-muted-foreground">
++                      {formatRelative(b.createdAt)}
++                    </TableCell>
++                    <TableCell className="text-right">
++                      <Button
++                        size="sm"
++                        variant="ghost"
++                        className="h-8 text-destructive hover:text-destructive"
++                        disabled={deletingId === b.id}
++                        onClick={() => handleDelete(b)}
++                      >
++                        <Trash2 className="h-3.5 w-3.5" />
++                      </Button>
++                    </TableCell>
++                  </TableRow>
++                ))}
++              </TableBody>
++            </Table>
++          )}
++        </CardContent>
++      </Card>
++
++      {totalPages > 1 && (
++        <div className="flex items-center justify-center gap-3">
++          <Button
++            size="sm"
++            variant="outline"
++            disabled={page <= 1 || loading}
++            onClick={() => {
++              const next = page - 1;
++              setPage(next);
++              load(next, search);
++            }}
++          >
++            Previous
++          </Button>
++          <span className="text-sm text-muted-foreground">
++            Page {page} of {totalPages}
++          </span>
++          <Button
++            size="sm"
++            variant="outline"
++            disabled={page >= totalPages || loading}
++            onClick={() => {
++              const next = page + 1;
++              setPage(next);
++              load(next, search);
++            }}
++          >
++            Next
++          </Button>
++        </div>
++      )}
++    </div>
++  );
++}
++
++export default function AdminBooksPage() {
++  return (
++    <AdminGuard>
++      <AdminBooksView />
++    </AdminGuard>
++  );
++}
+diff --git a/frontend/app/(dashboard)/admin/page.tsx b/frontend/app/(dashboard)/admin/page.tsx
+new file mode 100644
+index 0000000..12526a5
+--- /dev/null
++++ b/frontend/app/(dashboard)/admin/page.tsx
+@@ -0,0 +1,184 @@
++"use client";
++
++import { useEffect, useState } from "react";
++import Link from "next/link";
++import {
++  Users,
++  BookOpen,
++  ScanSearch,
++  Sparkles,
++  ChevronRight,
++  UserPlus,
++} from "lucide-react";
++import { AdminGuard } from "@/components/shared/AdminGuard";
++import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
++import { Skeleton } from "@/components/ui/skeleton";
++import { api } from "@/lib/api/client";
++import type { AdminStats } from "@/types";
++
++const sections = [
++  {
++    href: "/admin/users",
++    label: "Users",
++    desc: "Roles, credits, and accounts",
++    icon: Users,
++  },
++  {
++    href: "/admin/books",
++    label: "Books",
++    desc: "Every book across all authors",
++    icon: BookOpen,
++  },
++  {
++    href: "/admin/audits",
++    label: "Audience audits",
++    desc: "Status and failures across the site",
++    icon: ScanSearch,
++  },
++];
++
++function StatCard({
++  label,
++  value,
++  icon: Icon,
++  loading,
++}: {
++  label: string;
++  value: string;
++  icon: React.ComponentType<{ className?: string }>;
++  loading: boolean;
++}) {
++  return (
++    <Card>
++      <CardContent className="flex items-center gap-4 p-5">
++        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
++          <Icon className="h-5 w-5" />
++        </div>
++        <div>
++          {loading ? (
++            <Skeleton className="h-7 w-12" />
++          ) : (
++            <p className="text-2xl font-bold">{value}</p>
++          )}
++          <p className="text-sm text-muted-foreground">{label}</p>
++        </div>
++      </CardContent>
++    </Card>
++  );
++}
++
++function AdminOverview() {
++  const [stats, setStats] = useState<AdminStats | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++
++  useEffect(() => {
++    let cancelled = false;
++    api
++      .get<AdminStats>("/admin/stats")
++      .then((data) => {
++        if (!cancelled) setStats(data);
++      })
++      .catch((e) => {
++        if (!cancelled) setError(e.message || "Failed to load admin stats");
++      })
++      .finally(() => {
++        if (!cancelled) setLoading(false);
++      });
++    return () => {
++      cancelled = true;
++    };
++  }, []);
++
++  return (
++    <div className="mx-auto max-w-5xl space-y-8 animate-fade-in">
++      <div>
++        <h1 className="text-2xl font-bold tracking-tight">Admin</h1>
++        <p className="text-muted-foreground">Manage users, books, and audits site-wide</p>
++      </div>
++
++      {error && (
++        <Card className="border-destructive/30 bg-destructive/5">
++          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
++        </Card>
++      )}
++
++      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
++        <StatCard label="Users" value={String(stats?.userCount ?? 0)} icon={Users} loading={loading} />
++        <StatCard label="Books" value={String(stats?.bookCount ?? 0)} icon={BookOpen} loading={loading} />
++        <StatCard label="Audits run" value={String(stats?.auditCount ?? 0)} icon={ScanSearch} loading={loading} />
++        <StatCard label="Creatives made" value={String(stats?.creativeCount ?? 0)} icon={Sparkles} loading={loading} />
++      </div>
++
++      <Card>
++        <CardHeader className="flex flex-row items-center gap-2">
++          <UserPlus className="h-4 w-4 text-muted-foreground" />
++          <CardTitle className="text-base">
++            {loading ? "…" : stats?.newUsersLast7d ?? 0} new users in the last 7 days
++          </CardTitle>
++        </CardHeader>
++        {!loading && stats && (
++          <CardContent className="grid gap-6 sm:grid-cols-2">
++            <div>
++              <p className="mb-2 text-sm font-medium text-muted-foreground">Users by role</p>
++              <div className="space-y-1.5">
++                {stats.usersByRole.map((r) => (
++                  <div key={r.role} className="flex items-center justify-between text-sm">
++                    <span>{r.role}</span>
++                    <span className="font-medium">{r.count}</span>
++                  </div>
++                ))}
++              </div>
++            </div>
++            <div>
++              <p className="mb-2 text-sm font-medium text-muted-foreground">
++                Subscriptions by plan
++              </p>
++              <div className="space-y-1.5">
++                {stats.subscriptionsByPlan.length === 0 && (
++                  <p className="text-sm text-muted-foreground">No subscriptions yet</p>
++                )}
++                {stats.subscriptionsByPlan.map((p) => (
++                  <div key={p.plan} className="flex items-center justify-between text-sm">
++                    <span>{p.plan}</span>
++                    <span className="font-medium">{p.count}</span>
++                  </div>
++                ))}
++              </div>
++            </div>
++          </CardContent>
++        )}
++      </Card>
++
++      <div>
++        <h2 className="mb-4 text-lg font-semibold">Manage</h2>
++        <div className="space-y-2">
++          {sections.map((s) => (
++            <Link key={s.href} href={s.href}>
++              <Card className="mb-2 transition hover:border-primary/30">
++                <CardContent className="flex items-center gap-4 p-4">
++                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
++                    <s.icon className="h-4 w-4" />
++                  </div>
++                  <div className="flex-1">
++                    <p className="font-medium">{s.label}</p>
++                    <p className="text-sm text-muted-foreground">{s.desc}</p>
++                  </div>
++                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
++                </CardContent>
++              </Card>
++            </Link>
++          ))}
++        </div>
++      </div>
++    </div>
++  );
++}
++
++export default function AdminPage() {
++  return (
++    <AdminGuard>
++      <AdminOverview />
++    </AdminGuard>
++  );
++}
+diff --git a/frontend/app/(dashboard)/admin/users/page.tsx b/frontend/app/(dashboard)/admin/users/page.tsx
+new file mode 100644
+index 0000000..ee264b9
+--- /dev/null
++++ b/frontend/app/(dashboard)/admin/users/page.tsx
+@@ -0,0 +1,298 @@
++"use client";
++
++import { useEffect, useRef, useState } from "react";
++import Link from "next/link";
++import { ArrowLeft, Loader2, Trash2, Users } from "lucide-react";
++import { AdminGuard } from "@/components/shared/AdminGuard";
++import { Card, CardContent } from "@/components/ui/card";
++import { Input } from "@/components/ui/input";
++import { Select } from "@/components/ui/select";
++import { Button } from "@/components/ui/button";
++import { Badge } from "@/components/ui/badge";
++import {
++  Table,
++  TableHeader,
++  TableBody,
++  TableRow,
++  TableHead,
++  TableCell,
++} from "@/components/ui/table";
++import { EmptyState } from "@/components/shared/EmptyState";
++import { apiGetWithMeta, api, ApiError } from "@/lib/api/client";
++import { useAuth } from "@/lib/hooks/useAuth";
++import { formatRelative } from "@/lib/utils";
++import type { AdminUser, PaginationMeta, UserRole } from "@/types";
++
++const PAGE_SIZE = 20;
++const ROLES: UserRole[] = ["AUTHOR", "ADMIN", "SUPER_ADMIN"];
++
++function RoleBadge({ role }: { role: UserRole }) {
++  if (role === "SUPER_ADMIN") return <Badge variant="destructive">SUPER_ADMIN</Badge>;
++  if (role === "ADMIN") return <Badge variant="warning">ADMIN</Badge>;
++  return <Badge variant="secondary">AUTHOR</Badge>;
++}
++
++function AdminUsersView() {
++  const { user: me } = useAuth();
++  const [users, setUsers] = useState<AdminUser[]>([]);
++  const [meta, setMeta] = useState<PaginationMeta | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState("");
++  const [search, setSearch] = useState("");
++  const [page, setPage] = useState(1);
++  const [savingId, setSavingId] = useState<string | null>(null);
++  const [rowError, setRowError] = useState<Record<string, string>>({});
++  const [creditsDraft, setCreditsDraft] = useState<Record<string, string>>({});
++  const requestIdRef = useRef(0);
++
++  function load(nextPage: number, nextSearch: string) {
++    const requestId = ++requestIdRef.current;
++    setLoading(true);
++    const params = new URLSearchParams({ page: String(nextPage), limit: String(PAGE_SIZE) });
++    if (nextSearch) params.set("search", nextSearch);
++    apiGetWithMeta<AdminUser[], PaginationMeta>(`/admin/users?${params.toString()}`)
++      .then(({ data, meta: m }) => {
++        if (requestId !== requestIdRef.current) return;
++        setUsers(data);
++        setMeta(m);
++        setError("");
++      })
++      .catch((e) => {
++        if (requestId === requestIdRef.current) {
++          setError(e instanceof Error ? e.message : "Failed to load users");
++        }
++      })
++      .finally(() => {
++        if (requestId === requestIdRef.current) setLoading(false);
++      });
++  }
++
++  useEffect(() => {
++    const timer = setTimeout(() => {
++      setPage(1);
++      load(1, search);
++    }, search ? 300 : 0);
++    return () => clearTimeout(timer);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [search]);
++
++  async function updateUser(id: string, patch: { role?: UserRole; credits?: number }) {
++    setSavingId(id);
++    setRowError((prev) => ({ ...prev, [id]: "" }));
++    try {
++      const updated = await api.patch<AdminUser>(`/admin/users/${id}`, patch);
++      setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...updated } : u)));
++    } catch (e) {
++      const message =
++        e instanceof ApiError ? e.message : "Failed to update user";
++      setRowError((prev) => ({ ...prev, [id]: message }));
++    } finally {
++      setSavingId(null);
++    }
++  }
++
++  async function deleteUser(u: AdminUser) {
++    if (
++      !confirm(
++        `Delete ${u.email}? This permanently removes their account, books, and all related data.`
++      )
++    ) {
++      return;
++    }
++    setSavingId(u.id);
++    try {
++      await api.delete(`/admin/users/${u.id}`);
++      setUsers((prev) => prev.filter((x) => x.id !== u.id));
++      setMeta((prev) => (prev ? { ...prev, total: prev.total - 1 } : prev));
++    } catch (e) {
++      const message = e instanceof ApiError ? e.message : "Failed to delete user";
++      setRowError((prev) => ({ ...prev, [u.id]: message }));
++    } finally {
++      setSavingId(null);
++    }
++  }
++
++  const totalPages = meta?.totalPages ?? 1;
++
++  return (
++    <div className="mx-auto max-w-6xl space-y-6 animate-fade-in">
++      <div>
++        <Link
++          href="/admin"
++          className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
++        >
++          <ArrowLeft className="h-3.5 w-3.5" /> Admin
++        </Link>
++        <h1 className="text-2xl font-bold tracking-tight">Users</h1>
++        <p className="text-muted-foreground">
++          {meta ? `${meta.total} total` : "Loading…"}
++        </p>
++      </div>
++
++      <Input
++        placeholder="Search by name or email…"
++        value={search}
++        onChange={(e) => setSearch(e.target.value)}
++        className="max-w-sm"
++      />
++
++      {error && (
++        <Card className="border-destructive/30 bg-destructive/5">
++          <CardContent className="p-4 text-sm text-destructive">{error}</CardContent>
++        </Card>
++      )}
++
++      <Card>
++        <CardContent className="p-0">
++          {loading && (
++            <div className="flex justify-center py-16">
++              <Loader2 className="h-6 w-6 animate-spin text-primary" />
++            </div>
++          )}
++
++          {!loading && users.length === 0 && (
++            <EmptyState icon={Users} title="No users found" description="Try a different search." />
++          )}
++
++          {!loading && users.length > 0 && (
++            <Table>
++              <TableHeader>
++                <TableRow>
++                  <TableHead>User</TableHead>
++                  <TableHead>Role</TableHead>
++                  <TableHead>Credits</TableHead>
++                  <TableHead>Plan</TableHead>
++                  <TableHead>Books</TableHead>
++                  <TableHead>Joined</TableHead>
++                  <TableHead className="text-right">Actions</TableHead>
++                </TableRow>
++              </TableHeader>
++              <TableBody>
++                {users.map((u) => {
++                  const isSelf = u.id === me?.id;
++                  const draft = creditsDraft[u.id] ?? String(u.credits);
++                  return (
++                    <TableRow key={u.id}>
++                      <TableCell>
++                        <p className="font-medium">
++                          {u.firstName} {u.lastName}
++                        </p>
++                        <p className="text-xs text-muted-foreground">{u.email}</p>
++                        {rowError[u.id] && (
++                          <p className="mt-1 text-xs text-destructive">{rowError[u.id]}</p>
++                        )}
++                      </TableCell>
++                      <TableCell>
++                        <div className="flex items-center gap-2">
++                          <RoleBadge role={u.role} />
++                          {!isSelf && (
++                            <Select
++                              className="h-8 w-auto text-xs"
++                              value={u.role}
++                              disabled={savingId === u.id}
++                              onChange={(e) =>
++                                updateUser(u.id, { role: e.target.value as UserRole })
++                              }
++                            >
++                              {ROLES.map((r) => (
++                                <option key={r} value={r}>
++                                  {r}
++                                </option>
++                              ))}
++                            </Select>
++                          )}
++                        </div>
++                      </TableCell>
++                      <TableCell>
++                        <div className="flex items-center gap-1.5">
++                          <Input
++                            type="number"
++                            min={0}
++                            className="h-8 w-20 text-xs"
++                            value={draft}
++                            onChange={(e) =>
++                              setCreditsDraft((prev) => ({ ...prev, [u.id]: e.target.value }))
++                            }
++                          />
++                          <Button
++                            size="sm"
++                            variant="outline"
++                            className="h-8"
++                            disabled={savingId === u.id || Number(draft) === u.credits}
++                            onClick={() => updateUser(u.id, { credits: Number(draft) })}
++                          >
++                            Save
++                          </Button>
++                        </div>
++                      </TableCell>
++                      <TableCell className="text-sm">
++                        {u.subscription?.plan ?? "FREE"}
++                      </TableCell>
++                      <TableCell className="text-sm">{u._count.books}</TableCell>
++                      <TableCell className="text-xs text-muted-foreground">
++                        {formatRelative(u.createdAt)}
++                      </TableCell>
++                      <TableCell className="text-right">
++                        {!isSelf && (
++                          <Button
++                            size="sm"
++                            variant="ghost"
++                            className="h-8 text-destructive hover:text-destructive"
++                            disabled={savingId === u.id}
++                            onClick={() => deleteUser(u)}
++                          >
++                            <Trash2 className="h-3.5 w-3.5" />
++                          </Button>
++                        )}
++                      </TableCell>
++                    </TableRow>
++                  );
++                })}
++              </TableBody>
++            </Table>
++          )}
++        </CardContent>
++      </Card>
++
++      {totalPages > 1 && (
++        <div className="flex items-center justify-center gap-3">
++          <Button
++            size="sm"
++            variant="outline"
++            disabled={page <= 1 || loading}
++            onClick={() => {
++              const next = page - 1;
++              setPage(next);
++              load(next, search);
++            }}
++          >
++            Previous
++          </Button>
++          <span className="text-sm text-muted-foreground">
++            Page {page} of {totalPages}
++          </span>
++          <Button
++            size="sm"
++            variant="outline"
++            disabled={page >= totalPages || loading}
++            onClick={() => {
++              const next = page + 1;
++              setPage(next);
++              load(next, search);
++            }}
++          >
++            Next
++          </Button>
++        </div>
++      )}
++    </div>
++  );
++}
++
++export default function AdminUsersPage() {
++  return (
++    <AdminGuard>
++      <AdminUsersView />
++    </AdminGuard>
++  );
++}
+diff --git a/frontend/components/shared/AdminGuard.tsx b/frontend/components/shared/AdminGuard.tsx
+new file mode 100644
+index 0000000..a1b0ef6
+--- /dev/null
++++ b/frontend/components/shared/AdminGuard.tsx
+@@ -0,0 +1,28 @@
++"use client";
++
++import { useEffect } from "react";
++import { useRouter } from "next/navigation";
++import { useAuth } from "@/lib/hooks/useAuth";
++import { LoadingSpinner } from "@/components/shared/LoadingSpinner";
++
++/**
++ * Sits inside AuthGuard (via the (dashboard) layout) and additionally
++ * requires the signed-in user to have an admin role. Non-admins are
++ * bounced to the regular dashboard rather than seeing a 403 page.
++ */
++export function AdminGuard({ children }: { children: React.ReactNode }) {
++  const { user, loading } = useAuth();
++  const router = useRouter();
++  const isAdmin = user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
++
++  useEffect(() => {
++    if (loading) return;
++    if (!isAdmin) router.replace("/dashboard");
++  }, [loading, isAdmin, router]);
++
++  if (loading || !isAdmin) {
++    return <LoadingSpinner className="min-h-[60vh]" />;
++  }
++
++  return <>{children}</>;
++}
+diff --git a/frontend/components/shared/Sidebar.tsx b/frontend/components/shared/Sidebar.tsx
+index d37a6de..e085d1e 100644
+--- a/frontend/components/shared/Sidebar.tsx
++++ b/frontend/components/shared/Sidebar.tsx
+@@ -14,9 +14,11 @@ import {
+   LogOut,
+   Menu,
+   X,
++  ShieldCheck,
+ } from "lucide-react";
+ import { cn } from "@/lib/utils";
+ import { api } from "@/lib/api/client";
++import { useAuth } from "@/lib/hooks/useAuth";
+ 
+ const items = [
+   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+@@ -30,11 +32,16 @@ const items = [
+ 
+ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
+   const pathname = usePathname();
++  const { user } = useAuth();
++  const isAdmin = user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
++  const navItems = isAdmin
++    ? [...items, { href: "/admin", label: "Admin", icon: ShieldCheck }]
++    : items;
+ 
+   return (
+     <>
+       <nav className="flex-1 space-y-1 overflow-y-auto overscroll-contain p-4">
+-        {items.map((item) => {
++        {navItems.map((item) => {
+           const active =
+             pathname === item.href ||
+             (item.href !== "/dashboard" &&
+diff --git a/frontend/types/index.ts b/frontend/types/index.ts
+index 50ba103..8758738 100644
+--- a/frontend/types/index.ts
++++ b/frontend/types/index.ts
+@@ -278,4 +278,53 @@ export interface ApiResponse<T> {
+ export interface AuthTokens {
+   accessToken: string;
+   refreshToken: string;
++}
++
++export interface PaginationMeta {
++  total: number;
++  page: number;
++  limit: number;
++  totalPages: number;
++}
++
++export interface AdminStats {
++  userCount: number;
++  bookCount: number;
++  auditCount: number;
++  creativeCount: number;
++  newUsersLast7d: number;
++  subscriptionsByPlan: { plan: SubscriptionPlan; count: number }[];
++  usersByRole: { role: UserRole; count: number }[];
++}
++
++export interface AdminUser {
++  id: string;
++  email: string;
++  firstName: string;
++  lastName: string;
++  role: UserRole;
++  credits: number;
++  emailVerified: boolean;
++  createdAt: string;
++  lastLoginAt?: string | null;
++  subscription?: { plan: SubscriptionPlan; status: string } | null;
++  _count: { books: number };
++}
++
++export interface AdminBook {
++  id: string;
++  title: string;
++  genre: BookGenre;
++  createdAt: string;
++  user: { id: string; email: string; firstName: string; lastName: string };
++  _count: { audits: number; creatives: number };
++}
++
++export interface AdminAudit {
++  id: string;
++  status: AuditStatus;
++  requestedAt: string;
++  completedAt?: string | null;
++  errorMessage?: string | null;
++  book: { id: string; title: string; user: { email: string } };
+ }
+\ No newline at end of file

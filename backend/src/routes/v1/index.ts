@@ -10,6 +10,7 @@ import analyticsRoutes from './analytics.routes';
 import userRoutes from './user.routes';
 import billingRoutes from './billing.routes';
 import apiKeysRoutes from './apikeys.routes';
+import adminRoutes from './admin.routes';
 
 const router = Router();
 router.use('/auth', authRoutes);
@@ -24,4 +25,5 @@ router.use('/analytics', analyticsRoutes);
 router.use('/user', userRoutes);
 router.use('/billing', billingRoutes);
 router.use('/api-keys', apiKeysRoutes);
+router.use('/admin', adminRoutes);
 export default router;

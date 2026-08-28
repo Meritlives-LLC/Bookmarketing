@@ -14,9 +14,11 @@ import {
   LogOut,
   Menu,
   X,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api/client";
+import { useAuth } from "@/lib/hooks/useAuth";
 
 const items = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -30,11 +32,16 @@ const items = [
 
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
+  const navItems = isAdmin
+    ? [...items, { href: "/admin", label: "Admin", icon: ShieldCheck }]
+    : items;
 
   return (
     <>
       <nav className="flex-1 space-y-1 overflow-y-auto overscroll-contain p-4">
-        {items.map((item) => {
+        {navItems.map((item) => {
           const active =
             pathname === item.href ||
             (item.href !== "/dashboard" &&
