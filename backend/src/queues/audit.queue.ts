@@ -9,22 +9,13 @@ export const auditQueue: Queue<AuditJobData> | null = bullConnection
   : null;
 
 /**
- * Enqueue an audit job on BullMQ when Redis is available.
- * When Redis is not configured, run the audit inline in the API process
- * so status still moves Pending → Scraping → Analyzing → Completed.
+ * Run the audit inline in this process first — regardless of whether Redis
+ * is configured. Only if the inline run fails do we fall back to enqueuing
+ * it on BullMQ (when Redis is available) so the audit worker can retry it
+ * with backoff. If Redis isn't configured, a failed inline run just logs.
  */
 export async function enqueueAuditJob(data: AuditJobData) {
-  if (auditQueue) {
-    return auditQueue.add('run-audit', data, {
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 5000 },
-      removeOnComplete: 100,
-      removeOnFail: 500,
-    });
-  }
-
-  // Hybrid fallback: no Redis / no worker — process in this process.
-  logger.warn('Redis not configured — running audit inline (no queue)', {
+  logger.info('Running audit inline', {
     auditId: data.auditId,
     bookId: data.bookId,
   });
@@ -36,6 +27,29 @@ export async function enqueueAuditJob(data: AuditJobData) {
         auditId: data.auditId,
         error: (error as Error).message,
       });
+
+      if (!auditQueue) {
+        return;
+      }
+
+      logger.warn('Falling back to Redis queue for audit retry', {
+        auditId: data.auditId,
+        bookId: data.bookId,
+      });
+
+      auditQueue
+        .add('run-audit', data, {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          removeOnComplete: 100,
+          removeOnFail: 500,
+        })
+        .catch((queueError) => {
+          logger.error('Redis fallback enqueue also failed', {
+            auditId: data.auditId,
+            error: (queueError as Error).message,
+          });
+        });
     });
   });
 
