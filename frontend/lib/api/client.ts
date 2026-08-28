@@ -76,30 +76,37 @@ function redirectToLogin() {
 
 async function request<T>(
   path: string,
-  options: RequestInit = {},
+  options: RequestInit & { timeoutMs?: number } = {},
   isRetry = false
 ): Promise<{
   data: T;
   meta: Record<string, unknown>;
 }> {
+  const { timeoutMs = 20_000, ...fetchOptions } = options;
   const headers: HeadersInit = {
     "Content-Type": "application/json",
-    ...(options.headers || {}),
+    ...(fetchOptions.headers || {}),
   };
 
   // Without this, a slow or cold-starting backend leaves the caller's
   // loading state (e.g. a "Saving…" button) spinning indefinitely with
   // no feedback — the browser has no default timeout on same-origin
-  // fetches. 20s comfortably covers a Render free-tier cold start.
+  // fetches. The default (20s) suits fast, user-initiated actions.
+  // Long-running work that's polled for status (e.g. an in-progress
+  // scrape/audit) should pass a much longer timeoutMs — the audit
+  // pipeline runs scraping inline in this same process when Redis isn't
+  // configured, so a status check can legitimately be slow without
+  // anything actually being broken; aborting it early just replaces a
+  // slightly-late update with a scary, wrong error message.
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   let res: Response;
   try {
     res = await fetch(
       `${API_BASE}${path}`,
       {
-        ...options,
+        ...fetchOptions,
         headers,
         credentials: "include",
         signal: controller.signal,
@@ -184,7 +191,7 @@ async function request<T>(
 
 export async function apiClient<T>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit & { timeoutMs?: number } = {}
 ): Promise<T> {
   const { data } =
     await request<T>(
@@ -214,8 +221,8 @@ export async function apiGetWithMeta<
 }
 
 export const api = {
-  get: <T>(path: string) =>
-    apiClient<T>(path),
+  get: <T>(path: string, timeoutMs?: number) =>
+    apiClient<T>(path, { timeoutMs }),
 
   post: <T>(
     path: string,

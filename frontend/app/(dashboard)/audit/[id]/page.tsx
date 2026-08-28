@@ -50,8 +50,19 @@ export default function AuditDetailPage() {
 
   function load() {
     return api
-      .get<Audit>(`/audit/${id}`)
-      .then(setAudit)
+      // 90s, not the 20s default: this pipeline scrapes multiple sites and
+      // makes several sequential AI calls, and when Redis isn't configured
+      // it all runs inline in the same process as the API — a status check
+      // can legitimately take a while without anything being broken.
+      .get<Audit>(`/audit/${id}`, 90_000)
+      .then((data) => {
+        setAudit(data);
+        // Clear any error from a previous slow/failed tick — polling
+        // continues in the background regardless, so a stale error
+        // banner from one bad cycle shouldn't linger once we're
+        // successfully getting updates again.
+        setError("");
+      })
       .catch((e) => {
         setError(e.message || "Failed to load audit");
         throw e;
