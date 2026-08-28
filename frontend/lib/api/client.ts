@@ -87,14 +87,36 @@ async function request<T>(
     ...(options.headers || {}),
   };
 
-  const res = await fetch(
-    `${API_BASE}${path}`,
-    {
-      ...options,
-      headers,
-      credentials: "include",
+  // Without this, a slow or cold-starting backend leaves the caller's
+  // loading state (e.g. a "Saving…" button) spinning indefinitely with
+  // no feedback — the browser has no default timeout on same-origin
+  // fetches. 20s comfortably covers a Render free-tier cold start.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${API_BASE}${path}`,
+      {
+        ...options,
+        headers,
+        credentials: "include",
+        signal: controller.signal,
+      }
+    );
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new ApiError(
+        "This is taking longer than expected. Please try again.",
+        0,
+        "TIMEOUT"
+      );
     }
-  );
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const json = await res
     .json()

@@ -16,6 +16,8 @@ import type { BookGenre } from "@/types";
 export default function NewBookPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [slowSave, setSlowSave] = useState(false);
+  const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
   const [form, setForm] = useState({
     title: "",
@@ -58,7 +60,10 @@ export default function NewBookPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    setSuccess(false);
     setLoading(true);
+    setSlowSave(false);
+    const slowTimer = setTimeout(() => setSlowSave(true), 6_000);
     try {
       // Final pass: ensure ids are extracted even if user never blurred the field
       const fromAmazon = parseAmazonUrl(form.amazonUrl);
@@ -74,6 +79,7 @@ export default function NewBookPage() {
         isbn: form.isbn || fromAmazon.isbn || fromGoodreads.isbn || undefined,
       };
       const book = await api.post<{ id: string; auditId?: string | null }>("/books", body);
+      setSuccess(true);
       // Auto-audit starts on create — land on the live audit page when available
       if (book.auditId) {
         router.push(`/audit/${book.auditId}`);
@@ -83,7 +89,9 @@ export default function NewBookPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create book");
     } finally {
+      clearTimeout(slowTimer);
       setLoading(false);
+      setSlowSave(false);
     }
   }
 
@@ -111,6 +119,11 @@ export default function NewBookPage() {
             {error && (
               <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                 {error}
+              </div>
+            )}
+            {success && (
+              <div className="rounded-lg border border-emerald-500/50 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-600">
+                Book saved! Taking you there now…
               </div>
             )}
             <div className="space-y-2">
@@ -205,15 +218,22 @@ export default function NewBookPage() {
                 />
               </div>
             </div>
-            <div className="flex gap-3 pt-2">
-              <Button type="submit" disabled={loading}>
-                {loading ? "Saving…" : "Save book"}
-              </Button>
-              <Link href="/books">
-                <Button type="button" variant="outline">
-                  Cancel
+            <div className="flex flex-col gap-2 pt-2">
+              <div className="flex gap-3">
+                <Button type="submit" disabled={loading}>
+                  {loading ? "Saving…" : "Save book"}
                 </Button>
-              </Link>
+                <Link href="/books">
+                  <Button type="button" variant="outline">
+                    Cancel
+                  </Button>
+                </Link>
+              </div>
+              {slowSave && (
+                <p className="text-xs text-muted-foreground">
+                  Still working — this can take a little longer the first time. Hang tight.
+                </p>
+              )}
             </div>
           </form>
         </CardContent>
