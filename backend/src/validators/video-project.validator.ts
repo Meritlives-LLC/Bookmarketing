@@ -25,6 +25,7 @@ export const createVideoProjectSchema = z.object({
   subtitleStyle: z.nativeEnum(SubtitleStyle).optional(),
   subtitleConfig: z.record(z.string(), z.unknown()).optional(),
   narrationWordsPerMinute: z.number().int().min(60).max(300).optional(),
+  narrationVoice: z.string().trim().min(1).max(100).optional(),
 }).strict();
 
 // videoProjectController.generate reads only req.body?.sceneId.

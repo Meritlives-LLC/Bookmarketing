@@ -107,10 +107,15 @@ export async function processBookVideoJob(job: Job): Promise<void> {
         try {
           const result = await ffmpegAssemblyService.assemble({
             projectId: videoProjectId,
-            clips: rendered.map((s) => ({ videoUrl: s.videoUrl!, durationSec: s.actualDurationSec ?? s.estimatedDurationSec ?? 6 })),
+            clips: rendered.map((s) => ({
+              videoUrl: s.videoUrl!,
+              durationSec: s.actualDurationSec ?? s.estimatedDurationSec ?? 6,
+              narrationAudioUrl: s.narrationAudioUrl ?? undefined,
+            })),
             fullSrt: srt, fullVtt: vtt, fullAss: ass,
             burnSubtitles: requiresBurnedIn,
             subtitleStyle: project.subtitleStyle || 'CINEMATIC',
+            narrationMode: project.narrationVoice ? 'replace' : undefined,
           });
           // Burned-in subtitles were explicitly requested but the encode
           // step never produced a subtitleVideoKey — do not claim the

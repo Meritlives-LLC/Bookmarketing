@@ -14,6 +14,9 @@ const execFileAsync = promisify(execFile);
 // few hundred MB; capping here bounds both memory/disk use per download and
 // the damage an SSRF/DoS attempt via a huge response body could do.
 const MAX_CLIP_BYTES = 300 * 1024 * 1024;
+// Narration clips are a few minutes of speech at most — far smaller than a
+// video clip — but still bounded for the same reason.
+const MAX_NARRATION_BYTES = 50 * 1024 * 1024;
 const MAX_CLIPS_PER_ASSEMBLY = 200;
 const MAX_TOTAL_DURATION_SEC = 60 * 60; // 1 hour
 
@@ -21,6 +24,13 @@ export interface AssemblyClip {
   videoUrl: string;
   durationSec: number;
   srtContent?: string;
+  /**
+   * Storage key (or URL) of narration audio for this clip, e.g. from
+   * narrationService.generate(). When present, it is muxed into the clip
+   * before concat per `narrationMode`. When absent, the clip's own audio
+   * (if any — e.g. Veo 3's native audio) passes through untouched.
+   */
+  narrationAudioUrl?: string;
 }
 
 export interface AssembleOptions {
@@ -31,6 +41,17 @@ export interface AssembleOptions {
   fullAss?: string;
   burnSubtitles?: boolean;
   subtitleStyle?: string;
+  /**
+   * 'replace' (default): narration becomes the clip's only audio track —
+   * whatever native audio the provider generated (e.g. Veo 3 ambience) is
+   * dropped.
+   * 'mix': narration is layered over the clip's existing audio, with the
+   * original ducked under `duckToDb` so narration stays intelligible.
+   * Clips with no narrationAudioUrl are unaffected either way.
+   */
+  narrationMode?: 'replace' | 'mix';
+  /** dB level (negative = quieter) applied to the original audio bed in 'mix' mode. Default -18dB. */
+  narrationDuckDb?: number;
 }
 
 export interface AssembleResult {
@@ -99,7 +120,11 @@ async function ensureFfmpeg(): Promise<void> {
   }
 }
 
-async function downloadToFile(urlOrKey: string, dest: string): Promise<void> {
+async function downloadToFile(
+  urlOrKey: string,
+  dest: string,
+  opts: { maxBytes: number; allowedContentTypePrefixes: string[] },
+): Promise<void> {
   if (!/^https?:\/\//i.test(urlOrKey)) {
     try {
       const buf = await storageService.getObjectBuffer(urlOrKey);
@@ -117,10 +142,84 @@ async function downloadToFile(urlOrKey: string, dest: string): Promise<void> {
   // bytes ever hit FFmpeg. Route through the centralized, SSRF-hardened
   // downloader instead (HTTPS-only, private/reserved IPs blocked, redirects
   // re-validated, size/time capped, streamed rather than buffered).
-  await secureDownloadToFile(urlOrKey, dest, {
+  await secureDownloadToFile(urlOrKey, dest, opts);
+}
+
+async function downloadClipToFile(urlOrKey: string, dest: string): Promise<void> {
+  await downloadToFile(urlOrKey, dest, {
     maxBytes: MAX_CLIP_BYTES,
     allowedContentTypePrefixes: ['video/', 'application/octet-stream'],
   });
+}
+
+async function downloadNarrationToFile(urlOrKey: string, dest: string): Promise<void> {
+  await downloadToFile(urlOrKey, dest, {
+    maxBytes: MAX_NARRATION_BYTES,
+    allowedContentTypePrefixes: ['audio/', 'application/octet-stream'],
+  });
+}
+
+/**
+ * Whether a media file has at least one audio stream. Needed before
+ * attempting 'mix' mode — a clip with no native audio (silent Veo 2 output)
+ * has no `0:a` stream for ffmpeg's amix filter to reference, so that case
+ * must fall back to narration-only rather than erroring.
+ */
+async function hasAudioStream(filePath: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'error',
+      '-select_streams', 'a',
+      '-show_entries', 'stream=index',
+      '-of', 'csv=p=0',
+      filePath,
+    ], { timeout: 30_000 });
+    return stdout.trim().length > 0;
+  } catch (e) {
+    logger.warn('ffprobe audio-stream check failed — assuming no audio', { error: (e as Error).message });
+    return false;
+  }
+}
+
+/**
+ * Muxes narration audio into a single clip ahead of concat.
+ *
+ * 'replace': narration becomes the sole audio track.
+ * 'mix': original audio (if present) is ducked under `duckToDb` and layered
+ *   with narration; falls back to 'replace' behavior when the clip has no
+ *   audio stream to mix against.
+ *
+ * Narration is padded with silence (`apad`) so it never runs shorter than
+ * the clip, then `-shortest` bounds the output to the clip's own video
+ * duration — narration that runs longer than the clip is simply cut off at
+ * the clip boundary rather than dragging the clip out or overlapping into
+ * the next one.
+ */
+async function muxNarrationIntoClip(
+  clipPath: string,
+  narrationPath: string,
+  outPath: string,
+  mode: 'replace' | 'mix',
+  duckToDb: number,
+): Promise<void> {
+  const clipHasAudio = mode === 'mix' && (await hasAudioStream(clipPath));
+
+  const filterComplex = clipHasAudio
+    ? `[0:a]volume=${duckToDb}dB[bg];[1:a]apad[fg];[bg][fg]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`
+    : `[1:a]apad[aout]`;
+
+  await execFileAsync('ffmpeg', [
+    '-y',
+    '-i', clipPath,
+    '-i', narrationPath,
+    '-filter_complex', filterComplex,
+    '-map', '0:v:0',
+    '-map', '[aout]',
+    '-c:v', 'copy',
+    '-c:a', 'aac', '-b:a', '192k',
+    '-shortest',
+    outPath,
+  ], { timeout: 300_000 });
 }
 
 /**
@@ -162,12 +261,35 @@ export const ffmpegAssemblyService = {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), `bmos-film-${sanitizeTmpDirPrefix(opts.projectId)}-`));
     const clipPaths: string[] = [];
     let totalDuration = 0;
+    const narrationMode = opts.narrationMode ?? 'replace';
+    const narrationDuckDb = opts.narrationDuckDb ?? -18;
     try {
       for (let i = 0; i < opts.clips.length; i++) {
-        const local = path.join(tmp, `clip_${String(i).padStart(4, '0')}.mp4`);
-        await downloadToFile(opts.clips[i].videoUrl, local);
-        clipPaths.push(local);
+        const idx = String(i).padStart(4, '0');
+        const local = path.join(tmp, `clip_${idx}.mp4`);
+        await downloadClipToFile(opts.clips[i].videoUrl, local);
         totalDuration += opts.clips[i].durationSec || 0;
+
+        const narrationUrl = opts.clips[i].narrationAudioUrl;
+        if (narrationUrl) {
+          const narrationPath = path.join(tmp, `narration_${idx}.mp3`);
+          const muxedPath = path.join(tmp, `clip_${idx}_muxed.mp4`);
+          try {
+            await downloadNarrationToFile(narrationUrl, narrationPath);
+            await muxNarrationIntoClip(local, narrationPath, muxedPath, narrationMode, narrationDuckDb);
+            clipPaths.push(muxedPath);
+            continue;
+          } catch (e) {
+            // Narration is an enhancement, not a hard requirement for the
+            // film to exist — a single clip's narration failing should not
+            // fail the whole assembly. Fall back to the clip's own audio
+            // (silence, for Veo 2; native audio, for Veo 3) for this clip.
+            logger.error('Narration mux failed for clip — using clip audio as-is', {
+              clipIndex: i, error: (e as Error).message,
+            });
+          }
+        }
+        clipPaths.push(local);
       }
       const listFile = path.join(tmp, 'concat.txt');
       await fs.writeFile(listFile, clipPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n'), 'utf-8');

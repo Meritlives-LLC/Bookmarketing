@@ -65,6 +65,8 @@ export interface CreateVideoProjectInput {
   name?: string; visualStyle?: string; aspectRatio?: string; resolution?: string; videoModel?: string;
   subtitleEnabled?: boolean; subtitleMode?: string; subtitleStyle?: string;
   subtitleConfig?: Record<string, unknown>; narrationWordsPerMinute?: number;
+  /** Audioflow voice_id (e.g. 'en-US-AriaNeural') used to narrate every scene in this project. */
+  narrationVoice?: string;
 }
 export interface VideoProjectProgress {
   projectId: string; status: string; progress: number; totalChapters: number; totalScenes: number;

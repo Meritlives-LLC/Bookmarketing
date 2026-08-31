@@ -15,6 +15,7 @@ import { getVideoProvider } from './video-provider.service';
 import { compileShotPrompt, reasonCameraPlan, validateCameraPlan, normalizeShotCamera, validateCameraContinuity, suggestContinuityFix, type ShotCameraPlan } from '../cinematography';
 import { shotPromptCompilerService } from './shot-prompt-compiler.service';
 import { ffmpegAssemblyService } from './ffmpeg-assembly.service';
+import { narrationService } from './narration.service';
 import { storageService } from './storage.service';
 import { secureDownloadToBuffer, GOOGLE_PROVIDER_HOSTS } from '../utils/secure-remote-fetch';
 import { selectGroundedShotSource, validateSceneGrounding } from './scene-grounding-validator.service';
@@ -62,6 +63,7 @@ export const videoProjectService = {
       subtitleMode: (input.subtitleMode as SubtitleMode) || SubtitleMode.SOFT,
       subtitleStyle: (input.subtitleStyle as SubtitleStyle) || SubtitleStyle.CINEMATIC,
       subtitleConfig: input.subtitleConfig as any, narrationWordsPerMinute: input.narrationWordsPerMinute ?? 150,
+      narrationVoice: input.narrationVoice,
       totalChapters: chapterCount,
     });
   },
@@ -771,6 +773,32 @@ export const videoProjectService = {
 
     if (!failed.length && !assemblyFailed) {
       await videoProjectRepository.incrementCompletedScenes(project.id);
+
+      // Narration is generated once the scene's video is confirmed
+      // RENDERED, from the scene's own narrationText — not from any Veo
+      // output. A narration failure here is logged and left for retry; it
+      // must never fail or revert the scene's RENDERED status, since the
+      // video itself did succeed and assemble-film already tolerates a
+      // missing narrationAudioUrl per clip.
+      if (project.narrationVoice) {
+        try {
+          const rerendered = await videoSceneRepository.findById(sceneId);
+          if (rerendered?.narrationText?.trim()) {
+            const narration = await narrationService.generate({
+              text: rerendered.narrationText,
+              voiceId: project.narrationVoice,
+            });
+            await videoSceneRepository.update(sceneId, {
+              narrationAudioUrl: narration.audioKey,
+              narrationDurationSec: narration.durationSec,
+            });
+          }
+        } catch (e) {
+          logger.error('Narration generation failed for scene (non-fatal)', {
+            sceneId, error: (e as Error).message,
+          });
+        }
+      }
     }
     const updated = await videoProjectRepository.findById(project.id);
     if (updated?.totalScenes) {

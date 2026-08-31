@@ -7,7 +7,7 @@ export const videoProjectRepository = {
     visualStyle?: VisualStyle; aspectRatio?: VideoAspectRatio; resolution?: string;
     videoModel?: string; subtitleEnabled?: boolean; subtitleMode?: SubtitleMode;
     subtitleStyle?: SubtitleStyle; subtitleConfig?: Prisma.InputJsonValue;
-    narrationWordsPerMinute?: number; totalChapters?: number;
+    narrationWordsPerMinute?: number; narrationVoice?: string; totalChapters?: number;
   }) {
     return prisma.videoProject.create({ data });
   },
