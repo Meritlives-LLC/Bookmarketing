@@ -1,0 +1,371 @@
+diff --git a/backend/package.json b/backend/package.json
+index c485e26..ab5f299 100644
+--- a/backend/package.json
++++ b/backend/package.json
+@@ -43,6 +43,7 @@
+     "@aws-sdk/client-s3": "3.1116.0",
+     "@aws-sdk/s3-request-presigner": "3.1116.0",
+     "@prisma/client": "5.7.0",
++    "ws": "^8.16.0",
+     "axios": "1.19.0",
+     "bcryptjs": "2.4.3",
+     "bullmq": "5.81.3",
+@@ -87,6 +88,7 @@
+     "@types/nodemailer": "6.4.14",
+     "@types/supertest": "6.0.2",
+     "@types/uuid": "9.0.7",
++    "@types/ws": "8.5.10",
+     "@typescript-eslint/eslint-plugin": "^8.67.0",
+     "@typescript-eslint/parser": "^8.67.0",
+     "eslint": "8.57.0",
+diff --git a/backend/src/services/narration.service.ts b/backend/src/services/narration.service.ts
+index 12ac791..21be69f 100644
+--- a/backend/src/services/narration.service.ts
++++ b/backend/src/services/narration.service.ts
+@@ -1,172 +1,211 @@
++import WebSocket from 'ws';
++import { createHash, randomBytes } from 'crypto';
++import { promises as fs, createWriteStream } from 'fs';
++import path from 'path';
++import os from 'os';
+ import { logger } from '../utils/logger';
+ import { AppError } from '../utils/helpers';
+-import { assertRemoteUrlAllowed, secureDownloadToFile } from '../utils/secure-remote-fetch';
+ import { storageService } from './storage.service';
+-import { promises as fs } from 'fs';
+-import path from 'path';
+-import os from 'os';
+-import crypto from 'crypto';
+ 
+ export interface NarrationRequest {
+   text: string;
+   voiceId: string;
+-  personaId?: string;
++  rate?: string;   // e.g. '-10%', 'default'
++  pitch?: string;  // e.g. '+5%', 'default'
++  volume?: string; // e.g. 'default'
+ }
+ 
+ export interface NarrationResult {
+-  audioKey: string;       // storage key, after upload into this app's storage
+-  durationSec: number;    // Audioflow's estimated duration
+-  creditsUsed?: number;
++  audioKey: string;    // storage key after upload into this app's own storage
++  durationSec: number; // estimated from output file size
+ }
+ 
+-/**
+- * Wraps the Audioflow text-to-speech API (POST /api/v2/text-to-speech).
+- *
+- * Mirrors the hardening already used for the Veo provider:
+- *  - host + protocol pinned via env config, not caller input
+- *  - outbound call has a bounded timeout and never follows redirects blindly
+- *  - the audio_url Audioflow returns is relative to ITS OWN host, so it is
+- *    resolved against the configured base and re-validated (SSRF) before
+- *    being downloaded — never trust a returned URL/path outright
+- *  - the downloaded file is re-hosted into this app's own storage; nothing
+- *    downstream (ffmpeg, public URLs) ever points at the Audioflow host
+- */
+-class AudioflowNarrationProvider {
+-  private get timeoutMs(): number {
+-    const value = Number.parseInt(process.env.AUDIOFLOW_TIMEOUT_MS ?? '30000', 10);
+-    return Number.isFinite(value) ? Math.min(60_000, Math.max(5_000, value)) : 30_000;
+-  }
+-
+-  private get apiKey(): string {
+-    const key = (process.env.AUDIOFLOW_API_KEY ?? '').trim();
+-    if (!key) {
+-      throw AppError.badRequest('AUDIOFLOW_API_KEY is not configured.', 'NARRATION_PROVIDER_NOT_CONFIGURED');
+-    }
+-    return key;
+-  }
+-
+-  /**
+-   * Base URL is env-configured only — never derived from request input.
+-   * Enforces HTTPS the same way GeminiVeoProvider.baseUrl does.
+-   */
+-  private get baseUrl(): string {
+-    const configured = process.env.AUDIOFLOW_BASE_URL || '';
+-    if (!configured) {
+-      throw AppError.badRequest('AUDIOFLOW_BASE_URL is not configured.', 'NARRATION_PROVIDER_NOT_CONFIGURED');
++// ---------------------------------------------------------------------------
++// This talks directly to Microsoft Edge's built-in "Read Aloud" text-to-speech
++// service over its consumer WebSocket endpoint — the same free engine behind
++// Edge's narration feature. No account, credits, or API key are involved;
++// the "trusted client token" below is a fixed, publicly known value used by
++// Edge itself to identify requests as coming from the browser, not a secret
++// issued per-user. There is nothing to "sign up" for.
++//
++// Because this bypasses Microsoft's supported API surface, it can break if
++// Microsoft changes the endpoint/token scheme — there's no SLA here. Treat
++// it as a free/best-effort narration path, not a production guarantee.
++// ---------------------------------------------------------------------------
++
++const EDGE_CHROMIUM_FULL_VERSION = '143.0.3650.75';
++const EDGE_TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
++const WINDOWS_FILE_TIME_EPOCH = 11644473600n;
++
++const MAX_TEXT_LENGTH = 20_000; // guards against pathologically large single calls
++const DEFAULT_TIMEOUT_MS = 20_000;
++
++export const NARRATION_VOICES = [
++  { id: 'en-US-AriaNeural', name: 'Aria', gender: 'Female', language: 'en-US' },
++  { id: 'en-US-GuyNeural', name: 'Guy', gender: 'Male', language: 'en-US' },
++  { id: 'en-US-AnaNeural', name: 'Ana', gender: 'Female', language: 'en-US' },
++  { id: 'en-US-EricNeural', name: 'Eric', gender: 'Male', language: 'en-US' },
++  { id: 'en-US-MichelleNeural', name: 'Michelle', gender: 'Female', language: 'en-US' },
++  { id: 'en-GB-SoniaNeural', name: 'Sonia', gender: 'Female', language: 'en-GB' },
++  { id: 'en-GB-RyanNeural', name: 'Ryan', gender: 'Male', language: 'en-GB' },
++  { id: 'es-ES-AlvaroNeural', name: 'Alvaro', gender: 'Male', language: 'es-ES' },
++  { id: 'ja-JP-NanamiNeural', name: 'Nanami', gender: 'Female', language: 'ja-JP' },
++  { id: 'fr-FR-HenriNeural', name: 'Henri', gender: 'Male', language: 'fr-FR' },
++  { id: 'de-DE-ConradNeural', name: 'Conrad', gender: 'Male', language: 'de-DE' },
++  { id: 'hi-IN-SwaraNeural', name: 'Swara', gender: 'Female', language: 'hi-IN' },
++  { id: 'ko-KR-SunHiNeural', name: 'SunHi', gender: 'Female', language: 'ko-KR' },
++] as const;
++
++function escapeXml(value: string): string {
++  return value.replace(/[<>&"']/g, (char) => {
++    switch (char) {
++      case '<': return '&lt;';
++      case '>': return '&gt;';
++      case '&': return '&amp;';
++      case '"': return '&quot;';
++      case "'": return '&apos;';
++      default: return char;
+     }
+-    let parsed: URL;
+-    try {
+-      parsed = new URL(configured);
+-    } catch {
+-      throw AppError.badRequest('Invalid Audioflow base URL', 'NARRATION_PROVIDER_CONFIG_INVALID');
+-    }
+-    if (parsed.protocol !== 'https:') {
+-      throw AppError.badRequest('Audioflow base URL must be HTTPS', 'NARRATION_PROVIDER_CONFIG_INVALID');
+-    }
+-    return parsed.toString().replace(/\/$/, '');
+-  }
+-
+-  private get allowedHost(): string {
+-    return new URL(this.baseUrl).hostname;
+-  }
++  });
++}
+ 
+-  async generate(req: NarrationRequest): Promise<NarrationResult> {
+-    if (!req.text?.trim()) {
+-      throw AppError.badRequest('Narration text is required', 'NARRATION_TEXT_REQUIRED');
+-    }
+-    if (!req.voiceId) {
+-      throw AppError.badRequest('voiceId is required', 'NARRATION_VOICE_REQUIRED');
+-    }
++function generateEdgeSecMsGecToken(): string {
++  const ticks = BigInt(Math.floor(Date.now() / 1000) + Number(WINDOWS_FILE_TIME_EPOCH)) * 10_000_000n;
++  const roundedTicks = ticks - (ticks % 3_000_000_000n);
++  const hash = createHash('sha256');
++  hash.update(`${roundedTicks}${EDGE_TRUSTED_CLIENT_TOKEN}`, 'ascii');
++  return hash.digest('hex').toUpperCase();
++}
+ 
+-    const url = `${this.baseUrl}/api/v2/text-to-speech`;
++function buildEdgeSsml(
++  text: string,
++  { voice, lang, rate = 'default', pitch = 'default', volume = 'default' }:
++  { voice: string; lang: string; rate?: string; pitch?: string; volume?: string },
++): string {
++  const escaped = escapeXml(text);
++  const body = rate === 'default' && pitch === 'default' && volume === 'default'
++    ? `<voice name="${voice}">${escaped}</voice>`
++    : `<voice name="${voice}"><prosody rate="${rate}" pitch="${pitch}" volume="${volume}">${escaped}</prosody></voice>`;
++  return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="${lang}">${body}</speak>`;
++}
+ 
+-    let res: Response;
+-    try {
+-      res = await fetch(url, {
+-        method: 'POST',
++function synthesizeEdgeTtsSsml(
++  ssml: string,
++  audioPath: string,
++  { outputFormat = 'audio-24khz-48kbitrate-mono-mp3', timeoutMs = DEFAULT_TIMEOUT_MS }: { outputFormat?: string; timeoutMs?: number } = {},
++): Promise<void> {
++  return new Promise((resolve, reject) => {
++    const ws = new WebSocket(
++      `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${EDGE_TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${generateEdgeSecMsGecToken()}&Sec-MS-GEC-Version=1-${EDGE_CHROMIUM_FULL_VERSION}`,
++      {
+         headers: {
+-          'Content-Type': 'application/json',
+-          'x-api-key': this.apiKey,
++          Pragma: 'no-cache',
++          'Cache-Control': 'no-cache',
++          'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${EDGE_CHROMIUM_FULL_VERSION.split('.')[0]}.0.0.0 Safari/537.36 Edg/${EDGE_CHROMIUM_FULL_VERSION.split('.')[0]}.0.0.0`,
++          'Accept-Encoding': 'gzip, deflate, br, zstd',
++          'Accept-Language': 'en-US,en;q=0.9',
+         },
+-        body: JSON.stringify({
+-          text: req.text,
+-          voice_id: req.voiceId,
+-          ...(req.personaId ? { persona_id: req.personaId } : {}),
+-        }),
+-        // Never automatically follow a redirect from the narration host.
+-        redirect: 'error',
+-        signal: AbortSignal.timeout(this.timeoutMs),
++      },
++    );
++
++    let settled = false;
++    const fail = (err: unknown) => {
++      if (settled) return;
++      settled = true;
++      clearTimeout(timer);
++      try { ws.close(); } catch { /* ignore */ }
++      reject(err instanceof Error ? err : new Error(String(err)));
++    };
++
++    const timer = setTimeout(() => fail(new Error('Edge TTS request timed out')), timeoutMs);
++
++    ws.once('error', fail);
++
++    ws.once('open', () => {
++      ws.send(`Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},"outputFormat":"${outputFormat}"}}}}`);
++
++      const audioStream = createWriteStream(audioPath);
++      const requestId = randomBytes(16).toString('hex');
++
++      ws.on('message', (data: Buffer, isBinary: boolean) => {
++        if (settled) return;
++        if (isBinary) {
++          const separator = 'Path:audio\r\n';
++          const index = data.indexOf(separator) + separator.length;
++          audioStream.write(data.subarray(index));
++          return;
++        }
++        const message = data.toString();
++        if (message.includes('Path:turn.end')) {
++          audioStream.end();
++          audioStream.on('finish', () => {
++            if (settled) return;
++            settled = true;
++            clearTimeout(timer);
++            try { ws.close(); } catch { /* ignore */ }
++            resolve();
++          });
++        }
+       });
+-    } catch (error) {
+-      throw AppError.internal(
+-        `Audioflow request failed: ${(error as Error).message}`,
+-        'NARRATION_REQUEST_FAILED',
+-      );
+-    }
+ 
+-    if (res.status === 402) {
+-      throw AppError.badRequest('Audioflow account has insufficient credits', 'NARRATION_INSUFFICIENT_CREDITS');
+-    }
+-    if (!res.ok) {
+-      const errText = await res.text().catch(() => '');
+-      throw AppError.internal(
+-        `Audioflow error ${res.status}: ${errText.slice(0, 200)}`,
+-        'NARRATION_PROVIDER_ERROR',
+-      );
+-    }
++      audioStream.on('error', fail);
+ 
+-    const json = (await res.json()) as {
+-      success?: boolean;
+-      generation?: {
+-        id?: string;
+-        audio_url?: string;
+-        duration?: number;
+-        credits_used?: number;
+-      };
+-    };
++      ws.send(`X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`);
++    });
++  });
++}
+ 
+-    const audioPath = json.generation?.audio_url;
+-    if (!json.success || !audioPath) {
+-      throw AppError.internal('Audioflow response missing audio_url', 'NARRATION_PROVIDER_ERROR');
++function resolveVoice(voiceId: string): { id: string; language: string } {
++  const match = NARRATION_VOICES.find((v) => v.id === voiceId);
++  if (match) return { id: match.id, language: match.language };
++  logger.warn('Unknown narration voiceId — falling back to default', { voiceId });
++  return { id: 'en-US-AriaNeural', language: 'en-US' };
++}
++
++export const narrationService = {
++  voices: NARRATION_VOICES,
++
++  async generate(req: NarrationRequest): Promise<NarrationResult> {
++    const text = (req.text || '').trim();
++    if (!text) {
++      throw AppError.badRequest('Narration text is required', 'NARRATION_TEXT_REQUIRED');
++    }
++    if (text.length > MAX_TEXT_LENGTH) {
++      throw AppError.badRequest(`Narration text exceeds ${MAX_TEXT_LENGTH} characters`, 'NARRATION_TEXT_TOO_LONG');
+     }
+ 
+-    // audio_url is relative (e.g. "/audio/tts_<uuid>.mp3"), served off the
+-    // Audioflow host itself. Resolve against the *configured* base — never
+-    // let a value from the response introduce a different host — then
+-    // re-validate before downloading (SSRF hardening, same as Veo clips).
+-    const resolvedUrl = new URL(audioPath, this.baseUrl).toString();
+-    const validatedUrl = await assertRemoteUrlAllowed(resolvedUrl, {
+-      allowedHosts: [this.allowedHost],
++    const voice = resolveVoice(req.voiceId);
++    const ssml = buildEdgeSsml(text, {
++      voice: voice.id,
++      lang: voice.language,
++      rate: req.rate,
++      pitch: req.pitch,
++      volume: req.volume,
+     });
+ 
+-    const tmpPath = path.join(os.tmpdir(), `narration-${crypto.randomBytes(8).toString('hex')}.mp3`);
++    const tmpPath = path.join(os.tmpdir(), `narration-${randomBytes(8).toString('hex')}.mp3`);
+     try {
+-      await secureDownloadToFile(validatedUrl.toString(), tmpPath, {
+-        maxBytes: 50 * 1024 * 1024, // narration clips are short; generous cap
+-        allowedContentTypePrefixes: ['audio/'],
+-      });
++      await synthesizeEdgeTtsSsml(ssml, tmpPath);
++
++      const stats = await fs.stat(tmpPath);
++      if (stats.size < 500) {
++        throw AppError.internal('Edge TTS returned an empty audio file', 'NARRATION_EMPTY_RESULT');
++      }
+ 
+       const buf = await fs.readFile(tmpPath);
+       const audioKey = await storageService.uploadBuffer(buf, 'audio/mpeg', 'book-video/narration');
+ 
+       return {
+         audioKey,
+-        durationSec: json.generation?.duration ?? 0,
+-        creditsUsed: json.generation?.credits_used,
++        // Rough estimate (bytes / bitrate proxy) — good enough for
++        // scene-duration reconciliation, not exact.
++        durationSec: Math.max(1, Math.round(stats.size / 6000)),
+       };
++    } catch (error) {
++      if (error instanceof AppError) throw error;
++      throw AppError.internal(`Narration generation failed: ${(error as Error).message}`, 'NARRATION_FAILED');
+     } finally {
+-      try { await fs.rm(tmpPath, { force: true }); } catch { logger.warn('Failed to clean narration temp file', { tmpPath }); }
++      try { await fs.rm(tmpPath, { force: true }); } catch { /* best-effort cleanup */ }
+     }
+-  }
+-}
+-
+-let cached: AudioflowNarrationProvider | null = null;
+-
+-export function getNarrationProvider(): AudioflowNarrationProvider {
+-  if (!cached) cached = new AudioflowNarrationProvider();
+-  return cached;
+-}
+-
+-export const narrationService = {
+-  generate: (req: NarrationRequest) => getNarrationProvider().generate(req),
++  },
+ };
