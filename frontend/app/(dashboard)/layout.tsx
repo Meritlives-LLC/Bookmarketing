@@ -1,4 +1,5 @@
 import { Sidebar, MobileMenuButton } from "@/components/shared/Sidebar";
+import { BottomNav } from "@/components/shared/BottomNav";
 import { Topbar } from "@/components/shared/Topbar";
 import { NotificationBell } from "@/components/shared/NotificationBell";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
@@ -35,15 +36,12 @@ export default function DashboardLayout({
 
           <Topbar />
 
-          <main
-            className="flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4 md:p-8"
-            style={{
-              paddingBottom: "max(0.75rem, env(safe-area-inset-bottom, 0px))",
-            }}
-          >
+          <main className="flex-1 overflow-x-hidden overflow-y-auto p-3 pb-[max(5rem,calc(4rem+env(safe-area-inset-bottom,0px)))] sm:p-4 sm:pb-[max(5rem,calc(4rem+env(safe-area-inset-bottom,0px)))] md:p-8">
             {children}
           </main>
         </div>
+
+        <BottomNav />
       </div>
     </AuthGuard>
   );

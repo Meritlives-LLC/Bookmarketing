@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/lib/theme/ThemeProvider";
@@ -12,6 +12,31 @@ export const metadata: Metadata = {
   },
   description:
     "Bridge the gap between writing a great book and getting it into readers' hands. AI audience discovery, creative generation, and campaign optimization for authors.",
+  manifest: "/manifest.webmanifest",
+  // Standalone display + a status-bar style are what make Safari/Chrome
+  // treat an "Add to Home Screen" shortcut as a full-screen app rather than
+  // a bookmark that opens back into browser chrome.
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "BookMarketingOS",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  // Locking maximumScale/userScalable is a deliberate app-feel trade-off:
+  // it stops accidental pinch-zoom on tap targets (the way native apps
+  // behave) at the cost of zoom for accessibility. Revisit if that
+  // trade-off doesn't fit — Sidebar/BottomNav already use 44px+ touch
+  // targets specifically so this doesn't leave anything too small to tap.
+  maximumScale: 1,
+  userScalable: false,
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0c0a14" },
+  ],
 };
 
 // Runs before React hydrates so the correct theme class is on <html> from

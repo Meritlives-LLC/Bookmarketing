@@ -1,0 +1,148 @@
+diff --git a/frontend/app/(dashboard)/layout.tsx b/frontend/app/(dashboard)/layout.tsx
+index 02d7719..b9c8d59 100644
+--- a/frontend/app/(dashboard)/layout.tsx
++++ b/frontend/app/(dashboard)/layout.tsx
+@@ -1,4 +1,5 @@
+ import { Sidebar, MobileMenuButton } from "@/components/shared/Sidebar";
++import { BottomNav } from "@/components/shared/BottomNav";
+ import { Topbar } from "@/components/shared/Topbar";
+ import { NotificationBell } from "@/components/shared/NotificationBell";
+ import { ThemeToggle } from "@/components/shared/ThemeToggle";
+@@ -35,15 +36,12 @@ export default function DashboardLayout({
+ 
+           <Topbar />
+ 
+-          <main
+-            className="flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4 md:p-8"
+-            style={{
+-              paddingBottom: "max(0.75rem, env(safe-area-inset-bottom, 0px))",
+-            }}
+-          >
++          <main className="flex-1 overflow-x-hidden overflow-y-auto p-3 pb-[max(5rem,calc(4rem+env(safe-area-inset-bottom,0px)))] sm:p-4 sm:pb-[max(5rem,calc(4rem+env(safe-area-inset-bottom,0px)))] md:p-8">
+             {children}
+           </main>
+         </div>
++
++        <BottomNav />
+       </div>
+     </AuthGuard>
+   );
+diff --git a/frontend/app/layout.tsx b/frontend/app/layout.tsx
+index 1308022..92fccbe 100644
+--- a/frontend/app/layout.tsx
++++ b/frontend/app/layout.tsx
+@@ -1,4 +1,4 @@
+-import type { Metadata } from "next";
++import type { Metadata, Viewport } from "next";
+ import { Inter } from "next/font/google";
+ import "./globals.css";
+ import { ThemeProvider } from "@/lib/theme/ThemeProvider";
+@@ -12,6 +12,31 @@ export const metadata: Metadata = {
+   },
+   description:
+     "Bridge the gap between writing a great book and getting it into readers' hands. AI audience discovery, creative generation, and campaign optimization for authors.",
++  manifest: "/manifest.webmanifest",
++  // Standalone display + a status-bar style are what make Safari/Chrome
++  // treat an "Add to Home Screen" shortcut as a full-screen app rather than
++  // a bookmark that opens back into browser chrome.
++  appleWebApp: {
++    capable: true,
++    statusBarStyle: "default",
++    title: "BookMarketingOS",
++  },
++};
++
++export const viewport: Viewport = {
++  width: "device-width",
++  initialScale: 1,
++  // Locking maximumScale/userScalable is a deliberate app-feel trade-off:
++  // it stops accidental pinch-zoom on tap targets (the way native apps
++  // behave) at the cost of zoom for accessibility. Revisit if that
++  // trade-off doesn't fit — Sidebar/BottomNav already use 44px+ touch
++  // targets specifically so this doesn't leave anything too small to tap.
++  maximumScale: 1,
++  userScalable: false,
++  themeColor: [
++    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
++    { media: "(prefers-color-scheme: dark)", color: "#0c0a14" },
++  ],
+ };
+ 
+ // Runs before React hydrates so the correct theme class is on <html> from
+diff --git a/frontend/components/shared/BottomNav.tsx b/frontend/components/shared/BottomNav.tsx
+new file mode 100644
+index 0000000..d65ca48
+--- /dev/null
++++ b/frontend/components/shared/BottomNav.tsx
+@@ -0,0 +1,71 @@
++"use client";
++
++import Link from "next/link";
++import { usePathname } from "next/navigation";
++import {
++  LayoutDashboard,
++  BookOpen,
++  Sparkles,
++  Calendar,
++  Menu,
++} from "lucide-react";
++import { cn } from "@/lib/utils";
++
++// Kept deliberately short (4 primary destinations + "Menu") — a bottom bar
++// with more than ~5 targets stops reading as a native tab bar and starts
++// looking like an overflowing toolbar. Anything not here (Analytics,
++// Settings, Admin, Audience Audit, Logout) is still one tap away via the
++// "Menu" tab, which opens the existing Sidebar drawer rather than duplicating
++// its contents.
++const items = [
++  { href: "/dashboard", label: "Home", icon: LayoutDashboard },
++  { href: "/books", label: "Books", icon: BookOpen },
++  { href: "/creatives", label: "Creatives", icon: Sparkles },
++  { href: "/calendar", label: "Calendar", icon: Calendar },
++];
++
++export function BottomNav() {
++  const pathname = usePathname();
++
++  return (
++    <nav
++      className="fixed inset-x-0 bottom-0 z-40 flex border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:hidden"
++      style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
++      aria-label="Primary"
++    >
++      {items.map((item) => {
++        const active =
++          pathname === item.href ||
++          (item.href !== "/dashboard" && pathname.startsWith(item.href));
++
++        return (
++          <Link
++            key={item.href}
++            href={item.href}
++            className={cn(
++              "flex min-h-[56px] flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors",
++              active ? "text-primary" : "text-muted-foreground"
++            )}
++            aria-current={active ? "page" : undefined}
++          >
++            <item.icon
++              className="h-5 w-5"
++              strokeWidth={active ? 2.5 : 2}
++            />
++            {item.label}
++          </Link>
++        );
++      })}
++
++      <button
++        type="button"
++        className="flex min-h-[56px] flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-muted-foreground transition-colors"
++        onClick={() => window.dispatchEvent(new Event("bmos:open-sidebar"))}
++        aria-label="Open full menu"
++      >
++        <Menu className="h-5 w-5" />
++        Menu
++      </button>
++    </nav>
++  );
++}
