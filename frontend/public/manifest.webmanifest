@@ -1,11 +1,11 @@
 {
-  "name": "BookMarketingOS",
-  "short_name": "BookMarketingOS",
+  "name": "Kyuka Books",
+  "short_name": "Kyuka Books",
   "description": "AI Marketing OS for Authors",
   "start_url": "/dashboard",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#7c3aed",
+  "theme_color": "#4338CA",
   "orientation": "portrait-primary",
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
