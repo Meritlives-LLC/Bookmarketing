@@ -158,8 +158,8 @@ export function Sidebar() {
           </div>
 
           <span className="font-semibold tracking-tight">
-            BookMarketing
-            <span className="text-primary">OS</span>
+            Kyuka
+            <span className="text-primary">Books</span>
           </span>
         </div>
 
@@ -194,8 +194,8 @@ export function Sidebar() {
             </div>
 
             <span className="truncate font-semibold tracking-tight">
-              BookMarketing
-              <span className="text-primary">OS</span>
+              Kyuka
+              <span className="text-primary">Books</span>
             </span>
           </div>
 

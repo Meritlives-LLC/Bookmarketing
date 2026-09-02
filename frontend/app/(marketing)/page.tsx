@@ -77,7 +77,7 @@ export default function LandingPage() {
             already want it.
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground">
-            BookMarketingOS discovers where your ideal readers hang out, generates
+            Kyuka Books discovers where your ideal readers hang out, generates
             platform-native creatives, and runs campaigns that turn attention into
             sales — so you can get back to writing.
           </p>

@@ -1,6 +1,6 @@
-# BookMarketingOS — Frontend
+# Kyuka Books — Frontend
 
-Next.js 14 (App Router) frontend aligned with the BookMarketingOS project blueprint.
+Next.js 14 (App Router) frontend aligned with the Kyuka Books project blueprint.
 
 ## Stack
 

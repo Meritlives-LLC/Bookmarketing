@@ -24,7 +24,7 @@ export default async function BlogPostPage({
         <h1 className="text-3xl font-bold tracking-tight">{title}</h1>
         <p className="mt-6 leading-relaxed text-muted-foreground">
           This is a placeholder article. Full content can be loaded from a CMS or
-          markdown files. BookMarketingOS helps authors discover readers on BookTok,
+          markdown files. Kyuka Books helps authors discover readers on BookTok,
           Goodreads, Amazon, Reddit, and more — then generate campaigns that speak
           their language.
         </p>

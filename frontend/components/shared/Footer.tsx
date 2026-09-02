@@ -11,7 +11,7 @@ export function Footer() {
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                 <BookOpen className="h-4 w-4" />
               </div>
-              <span>BookMarketingOS</span>
+              <span>Kyuka Books</span>
             </Link>
             <p className="text-sm text-muted-foreground">
               The AI-powered marketing operating system that connects authors with readers who are already looking for books like theirs.
@@ -41,7 +41,7 @@ export function Footer() {
           </div>
         </div>
         <div className="mt-10 border-t pt-6 text-center text-sm text-muted-foreground">
-          © {new Date().getFullYear()} BookMarketingOS. Built for authors who write books worth reading.
+          © {new Date().getFullYear()} Kyuka Books. Built for authors who write books worth reading.
         </div>
       </div>
     </footer>

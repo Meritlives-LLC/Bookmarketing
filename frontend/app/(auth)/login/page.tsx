@@ -59,7 +59,7 @@ function LoginForm() {
           Welcome back
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Log in to your BookMarketingOS account
+          Log in to your Kyuka Books account
         </p>
       </div>
 

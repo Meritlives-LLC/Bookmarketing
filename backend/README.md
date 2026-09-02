@@ -1,6 +1,6 @@
-# BookMarketingOS — Backend
+# Kyuka Books — Backend
 
-Express.js/TypeScript API powering the BookMarketingOS marketing automation platform for authors.
+Express.js/TypeScript API powering the Kyuka Books marketing automation platform for authors.
 
 ## Stack
 
@@ -48,7 +48,7 @@ This spins up Postgres, Redis, the API, and all background workers/cron in one c
 
 ## Background processing
 
-BookMarketingOS uses BullMQ (Redis-backed) queues for anything that talks to an AI model or scrapes
+Kyuka Books uses BullMQ (Redis-backed) queues for anything that talks to an AI model or scrapes
 the web, so API requests return immediately (`202 Accepted`) while work happens asynchronously.
 
 Run workers as separate processes:

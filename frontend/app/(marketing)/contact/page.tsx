@@ -19,7 +19,7 @@ export default function ContactPage() {
       <div className="mx-auto max-w-xl">
         <h1 className="text-4xl font-bold tracking-tight">Contact</h1>
         <p className="mt-3 text-muted-foreground">
-          Questions about BookMarketingOS? We&apos;d love to hear from you.
+          Questions about Kyuka Books? We&apos;d love to hear from you.
         </p>
         <Card className="mt-10">
           <CardHeader>

@@ -25,7 +25,7 @@ export default function DashboardLayout({
             <div className="flex min-w-0 items-center gap-1 sm:gap-2">
               <MobileMenuButton />
               <span className="truncate text-sm font-semibold sm:text-base">
-                BookMarketing<span className="text-primary">OS</span>
+                Kyuka<span className="text-primary">Books</span>
               </span>
             </div>
             <div className="flex shrink-0 items-center gap-0.5">

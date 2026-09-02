@@ -7,8 +7,8 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-geist-sans" });
 
 export const metadata: Metadata = {
   title: {
-    default: "BookMarketingOS — AI Marketing OS for Authors",
-    template: "%s | BookMarketingOS",
+    default: "Kyuka Books — AI Marketing OS for Authors",
+    template: "%s | Kyuka Books",
   },
   description:
     "Bridge the gap between writing a great book and getting it into readers' hands. AI audience discovery, creative generation, and campaign optimization for authors.",
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "BookMarketingOS",
+    title: "Kyuka Books",
   },
 };
 

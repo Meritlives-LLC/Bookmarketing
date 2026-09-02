@@ -1,4 +1,4 @@
-# BookMarketingOS
+# Kyuka Books
 
 Manuscript-to-marketing platform with an AI Book-to-Film video pipeline
 (Next.js frontend + Express/Prisma backend + BullMQ workers).

@@ -4,7 +4,7 @@ export default function AboutPage() {
   return (
     <div className="px-4 py-16 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-3xl">
-        <h1 className="text-4xl font-bold tracking-tight">About BookMarketingOS</h1>
+        <h1 className="text-4xl font-bold tracking-tight">About Kyuka Books</h1>
         <div className="mt-8 space-y-6 text-muted-foreground leading-relaxed">
           <p>
             Most authors are writers first. They spend years crafting a book —
@@ -14,7 +14,7 @@ export default function AboutPage() {
             give up within three months.
           </p>
           <p>
-            BookMarketingOS was built to close that gap. We don&apos;t just generate
+            Kyuka Books was built to close that gap. We don&apos;t just generate
             ads. We discover <em>where</em> readers who want books like yours
             already hang out — BookTok, Goodreads, Amazon search, Reddit,
             BookTube, newsletters, Facebook groups, podcasts — and create

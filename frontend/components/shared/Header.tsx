@@ -27,7 +27,7 @@ export function Header() {
             <BookOpen className="h-5 w-5" />
           </div>
           <span className="text-lg tracking-tight">
-            BookMarketing<span className="text-primary">OS</span>
+            Kyuka<span className="text-primary">Books</span>
           </span>
         </Link>
 
