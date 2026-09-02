@@ -1,12 +1,8 @@
-[
-  {
-    "relation": ["delegate_permission/common.handle_all_urls"],
-    "target": {
-      "namespace": "android_app",
-      "package_name": "REPLACE_WITH_YOUR_TWA_PACKAGE_NAME",
-      "sha256_cert_fingerprints": [
-        "REPLACE_WITH_YOUR_APK_SIGNING_CERT_SHA256_FINGERPRINT"
-      ]
-    }
-  }
-]
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "com.onrender.bookmarketing_dugk.twa",
+        "sha256_cert_fingerprints": ["2F:BA:94:02:51:E9:F0:A6:D2:D3:B4:B8:54:91:F3:7C:1E:7D:C4:27:62:F6:BF:0B:51:B8:0F:D2:23:DE:9D:E9"]
+      }
+    }]
